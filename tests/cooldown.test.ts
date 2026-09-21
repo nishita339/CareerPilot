@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  applicationEvents,
   buildPriorApplications,
   checkCooldown,
+  countApplicationsSince,
+  UNDO_ACTION,
   clampCooldownDays,
   COOLDOWN_DEFAULTS,
   isApplicationAction,
@@ -142,6 +145,129 @@ describe("checkCooldown", () => {
       now: NOW,
     });
     expect(decision.blocked).toBe(false);
+  });
+});
+
+describe("undoing a hand-recorded application", () => {
+  const jobOrgs = new Map([
+    ["job_manual", "Handshake Labs"],
+    ["job_email", "Acme Cloud"],
+  ]);
+  const manualAt = NOW - 3 * 3_600_000; // applied 3h ago, same day
+
+  const base = [
+    {
+      action: "applied (manual)",
+      createdAt: manualAt,
+      organization: "Handshake Labs",
+      jobId: "job_manual",
+    },
+    {
+      action: "applied (email)",
+      createdAt: manualAt,
+      organization: "Acme Cloud",
+      jobId: "job_email",
+    },
+  ];
+
+  test("a mis-clicked application stops counting once undone", () => {
+    const activity = [
+      ...base,
+      {
+        action: UNDO_ACTION,
+        createdAt: manualAt + 60_000,
+        organization: "Handshake Labs",
+        jobId: "job_manual",
+      },
+    ];
+
+    // Cap: only the emailed application is left today.
+    expect(countApplicationsSince(activity, NOW - 12 * 3_600_000)).toBe(1);
+
+    // Cooldown: the company is free again.
+    const prior = buildPriorApplications({ activity, organizationByJobId: jobOrgs });
+    expect(prior.map((p) => p.organization)).toEqual(["Acme Cloud"]);
+    expect(
+      checkCooldown({ organization: "Handshake Labs", prior, now: NOW }).blocked,
+    ).toBe(false);
+  });
+
+  test("an undone application followed by a new one counts again", () => {
+    const activity = [
+      ...base,
+      {
+        action: UNDO_ACTION,
+        createdAt: manualAt + 60_000,
+        organization: "Handshake Labs",
+        jobId: "job_manual",
+      },
+      {
+        action: "applied (manual)",
+        createdAt: manualAt + 120_000,
+        organization: "Handshake Labs",
+        jobId: "job_manual",
+      },
+    ];
+    expect(countApplicationsSince(activity, NOW - 12 * 3_600_000)).toBe(2);
+    expect(
+      checkCooldown({
+        organization: "Handshake Labs",
+        prior: buildPriorApplications({ activity, organizationByJobId: jobOrgs }),
+        now: NOW,
+      }).blocked,
+    ).toBe(true);
+  });
+
+  test("an email send is never undone, even if a marker row appears", () => {
+    const activity = [
+      {
+        action: "applied (email)",
+        createdAt: manualAt,
+        organization: "Acme Cloud",
+        jobId: "job_email",
+      },
+      {
+        action: UNDO_ACTION,
+        createdAt: manualAt + 60_000,
+        organization: "Acme Cloud",
+        jobId: "job_email",
+      },
+    ];
+    // The marker only cancels hand-recorded rows; a delivered email stands.
+    expect(applicationEvents(activity).map((e) => e.action)).toEqual([
+      "applied (email)",
+    ]);
+    expect(
+      checkCooldown({
+        organization: "Acme Cloud",
+        prior: buildPriorApplications({ activity, organizationByJobId: jobOrgs }),
+        now: NOW,
+      }).blocked,
+    ).toBe(true);
+  });
+
+  test("an out-of-order marker does not cancel a later application", () => {
+    const activity = [
+      {
+        action: UNDO_ACTION,
+        createdAt: manualAt - 60_000, // before the application it mentions
+        jobId: "job_manual",
+      },
+      ...base,
+    ];
+    expect(countApplicationsSince(activity, NOW - 12 * 3_600_000)).toBe(2);
+  });
+
+  test("non-application rows are still ignored entirely", () => {
+    expect(
+      countApplicationsSince(
+        [
+          { action: "tailored (v1, validated)", createdAt: NOW - 1000 },
+          { action: UNDO_ACTION, createdAt: NOW - 500, jobId: "job_manual" },
+        ],
+        0,
+      ),
+    ).toBe(0);
   });
 });
 

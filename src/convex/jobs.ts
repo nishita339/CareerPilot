@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { PIPELINE_STATUSES, type PipelineStatus } from "./policy";
+import { UNDO_ACTION } from "./cooldown";
 import { scoreMatch } from "./matcher";
 import { similarity } from "./skills";
 
@@ -197,9 +198,66 @@ export const markAppliedManually = mutation({
       throw new Error(`Already recorded as "${job.status}".`);
     }
     const now = Date.now();
-    await ctx.db.patch(jobId, { status: "Applied", appliedAt: now });
+    await ctx.db.patch(jobId, {
+      status: "Applied",
+      appliedAt: now,
+      // Remember where to go back to if this was a mis-click.
+      preApplyStatus: job.status,
+    });
     await log(ctx, userId, "applied (manual)", jobId, job.title, job.organization);
     return { ok: true, appliedAt: now };
+  },
+});
+
+/**
+ * Take back a hand-recorded application (mis-click, or you changed your mind
+ * before submitting). The audit row stays append-only — an `undid` marker is
+ * added and the accounting ignores the original, so the daily cap slot is free
+ * again and the company cooldown lifts.
+ *
+ * Sends this app made by email cannot be undone: they were really delivered.
+ */
+export const undoManualApply = mutation({
+  args: { jobId: v.id("jobs") },
+  handler: async (ctx, { jobId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Sign in required.");
+    const job = await ctx.db.get(jobId);
+    if (!job || job.userId !== userId) throw new Error("Job not found.");
+    if (job.status !== "Applied" || !job.preApplyStatus) {
+      throw new Error(
+        "Only an application you recorded by hand can be undone — a send made by CareerPilot has really been delivered.",
+      );
+    }
+
+    const activity = await ctx.db
+      .query("activity")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+    const manualRows = activity
+      .filter((a) => a.jobId === jobId && a.action === "applied (manual)")
+      .sort((a, b) => b.createdAt - a.createdAt);
+    const latest = manualRows[0];
+    if (!latest) throw new Error("No hand-recorded application found for this role.");
+    if (
+      activity.some(
+        (a) =>
+          a.jobId === jobId &&
+          a.action === UNDO_ACTION &&
+          a.createdAt >= latest.createdAt,
+      )
+    ) {
+      throw new Error("This application is already undone.");
+    }
+
+    const restored = job.preApplyStatus;
+    await ctx.db.patch(jobId, {
+      status: restored,
+      appliedAt: undefined,
+      preApplyStatus: undefined,
+    });
+    await log(ctx, userId, UNDO_ACTION, jobId, job.title, job.organization);
+    return { ok: true, restoredStatus: restored };
   },
 });
 

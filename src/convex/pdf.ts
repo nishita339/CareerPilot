@@ -204,6 +204,9 @@ export function pdfWarnings(result: PdfBuildResult): string[] {
     warnings.push(
       "Some characters could not be encoded at all — for full Unicode, open the resume preview and use your browser's Print → Save as PDF.",
     );
+    warnings.push(
+      "For applications, prefer the Latin spelling of your name and an English-language resume: ATS parsers read those most reliably.",
+    );
   }
   return warnings;
 }

@@ -78,7 +78,6 @@ export const tailor = action({
       );
     }
 
-    if (!profile) throw new Error("Complete your Master Profile first.");
     const safeProfile = { ...profile, skills: profile.skills ?? [] };
 
     const jobDescription = [

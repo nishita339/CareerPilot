@@ -906,6 +906,7 @@ function ApplicationKit({
 }) {
   const profile = useQuery(api.profiles.getProfile);
   const exportPdf = useAction(api.resumePdf.exportResumePdf);
+  const undoManual = useMutation(api.jobs.undoManualApply);
   const [busy, setBusy] = useState<string | null>(null);
 
   const doc = asResumeDoc(job.resumeData);
@@ -964,6 +965,9 @@ function ApplicationKit({
     );
 
   const appliedAlready = alreadyApplied(job.status);
+  // Hand-recorded applications carry the status they came from; only those can
+  // be taken back, and only while they are still in Applied.
+  const undoable = job.status === "Applied" && Boolean(job.preApplyStatus);
 
   return (
     <div className="border-b border-border px-5 py-4">
@@ -1071,32 +1075,73 @@ function ApplicationKit({
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 rounded-none"
-          disabled={busy !== null || appliedAlready}
-          onClick={async () => {
-            setBusy("manual");
-            try {
-              await onMarkApplied();
-            } finally {
-              setBusy(null);
-            }
-          }}
-        >
-          {busy === "manual" ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <Check className="size-3.5" />
-          )}
-          I submitted this myself
-        </Button>
-        <span className="text-xs leading-5 text-muted-foreground">
-          {appliedAlready
-            ? `Already recorded as ${job.status}.`
-            : "Recording it keeps the daily cap and the company cooldown honest. Approve first if you want your decision in the audit trail."}
-        </span>
+        {undoable ? (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 rounded-none"
+              disabled={busy !== null}
+              onClick={async () => {
+                if (
+                  !confirm(
+                    "Undo this application? It will stop counting against today's cap and the company cooldown will be lifted.",
+                  )
+                )
+                  return;
+                setBusy("undo");
+                try {
+                  await undoManual({ jobId: job._id });
+                  toast.success(`Undone — back to “${job.preApplyStatus}”`);
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Undo failed");
+                } finally {
+                  setBusy(null);
+                }
+              }}
+            >
+              {busy === "undo" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              Undo — I didn&apos;t submit this
+            </Button>
+            <span className="text-xs leading-5 text-muted-foreground">
+              Recorded by hand, so it can be taken back. Email sends this app
+              made cannot be undone — those really were delivered.
+            </span>
+          </>
+        ) : (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 rounded-none"
+              disabled={busy !== null || appliedAlready}
+              onClick={async () => {
+                setBusy("manual");
+                try {
+                  await onMarkApplied();
+                } finally {
+                  setBusy(null);
+                }
+              }}
+            >
+              {busy === "manual" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Check className="size-3.5" />
+              )}
+              I submitted this myself
+            </Button>
+            <span className="text-xs leading-5 text-muted-foreground">
+              {appliedAlready
+                ? `Already recorded as ${job.status}.`
+                : "Recording it keeps the daily cap and the company cooldown honest — and it counts against today's cap, so undo is available if you mis-click. Approve first if you want your decision in the audit trail."}
+            </span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1325,7 +1370,9 @@ function ProfileDialog({
               When the daily collect + score + digest pass runs for you. The
               scheduler ticks every hour at :30 and only acts on your chosen
               hour, so nothing else changes. Times are shown in your browser's
-              timezone — the value stored is UTC.
+              timezone — the value stored is UTC. A digest sent in the previous
+              20 hours skips the next scheduled pass, so changing this time
+              right after a manual send takes effect the following day.
             </p>
           </Field>
           <Field label="Demo mode" full>

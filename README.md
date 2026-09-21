@@ -79,7 +79,7 @@ Both export builders live in pure modules (`pdf.ts`, `xlsx.ts`) with no Convex
 dependencies, so the test suite builds a real PDF and a real workbook and
 asserts their structure.
 
-**Non-Latin text.** The standard PDF fonts are WinAnsi (Latin-1 plus typography),
+**Non-Latin text — a workaround, not a solution.** The standard PDF fonts are WinAnsi (Latin-1 plus typography),
 so a Devanagari, CJK or Cyrillic name cannot be encoded by them at all — and
 pdf-lib throws rather than degrading. `sanitizeForWinAnsi` runs first: characters
 that decompose to a Latin base letter (`Ā → A`, `Ș → S`, `ź → z`) are folded,
@@ -89,7 +89,10 @@ a warning in the UI — e.g. *“Latin-only PDF font: adjusted 4 characters”* 
 the same warning rides along with an approved send. If your name or school is
 not Latin script, use the resume preview and your browser's **Print → Save as
 PDF** for that application instead: browser printing uses system fonts and
-handles full Unicode.
+handles full Unicode. The real fix is embedding a Unicode font (Noto Sans,
+subset) so no character has to be folded at all; until then the practical advice
+holds — keep the resume in English and use the Latin spelling of your name,
+which is what ATS parsers read most reliably anyway.
 
 ## Application kit (web forms, no automation)
 
@@ -103,7 +106,21 @@ There is no browser automation anywhere in this app — no form pre-filling, no
 headless browser, no stealth plugins, no CAPTCHA handling, no proxy rotation.
 You paste, upload and press Submit yourself. Recording the application matters:
 the audit trail is what enforces the daily cap and the company cooldown, so a
-hand-submitted role counts exactly like one this app emailed.
+hand-submitted role counts exactly like one this app emailed — which also means
+a mis-click costs a cap slot and blocks that company, so **hand-recorded
+applications can be undone**.
+
+`undoManualApply` restores the status the role had before you recorded it and
+writes an `undid applied (manual)` marker. The audit trail stays append-only;
+the accounting simply ignores the cancelled row, so the cap slot is free again
+and the cooldown lifts (`applicationEvents` / `countApplicationsSince` in
+`cooldown.ts`). Email sends made by the app cannot be undone — they were really
+delivered, and pretending otherwise would let the app spam an employer.
+
+Note the interaction the other way round: because every recorded application
+counts, ten hand-submitted roles in one day use up the whole daily cap, and the
+app will refuse to send another application until tomorrow. That is deliberate —
+the cap is about real applications, not about who pressed send.
 
 ## Company cooldown
 
@@ -162,7 +179,7 @@ needs.
 ## Tests
 
 ```bash
-bun test          # 95 tests: matcher, dedupe, validator, resume model, exports,
+bun test          # 100 tests: matcher, dedupe, validator, resume model, exports,
                   # collectors, company cooldown, deadlines, scheduling,
                   # PDF encoding (non-Latin safety)
 bun convex dev --once && bunx tsc -b --noEmit
@@ -176,7 +193,8 @@ WinAnsi — to assert the resume is machine-readable, in linear order, with no
 garbled characters. The cooldown tests cover the four cases that matter (same
 org inside the window, just outside it, a different org, and name variants) plus
 timestamp, clamping and audit-mapping edge cases (hand-submitted applies count,
-non-application rows never do). The PDF tests include a non-Latin profile: one
+non-application rows never do, an undone hand-recorded apply stops counting
+while an emailed one always stands). The PDF tests include a non-Latin profile: one
 test proves pdf-lib *cannot* encode Devanagari with the standard fonts (the bug
 the sanitizer prevents), and the rest prove the export still returns a valid,
 openable PDF with honest warnings instead of failing.

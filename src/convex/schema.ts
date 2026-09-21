@@ -87,6 +87,9 @@ export default defineSchema({
     validationNotes: v.optional(v.string()),
     approvedAt: v.optional(v.number()),
     appliedAt: v.optional(v.number()),
+    /** Status to restore if the user undoes a hand-recorded application.
+     *  Only set by the manual path — email sends cannot be undone. */
+    preApplyStatus: v.optional(v.string()),
     scrapedAt: v.number(),
     notes: v.optional(v.string()),
   })

@@ -121,6 +121,42 @@ export interface ActivityLike {
   jobId?: string;
 }
 
+/** Written when the user takes back a hand-recorded application. */
+export const UNDO_ACTION = "undid applied (manual)";
+
+/**
+ * The application rows that still stand.
+ *
+ * A hand-recorded application the user later undid is dropped, so a mis-click
+ * neither burns a slot in the daily cap nor blocks that company for the whole
+ * cooldown window. Email sends are never dropped: they were really delivered,
+ * and pretending otherwise would let the app spam an employer.
+ */
+export function applicationEvents(activity: ActivityLike[]): ActivityLike[] {
+  const undoneAt = new Map<string, number>();
+  for (const row of activity) {
+    if (row.action !== UNDO_ACTION || !row.jobId) continue;
+    const previous = undoneAt.get(row.jobId) ?? 0;
+    if (row.createdAt >= previous) undoneAt.set(row.jobId, row.createdAt);
+  }
+
+  return activity.filter((row) => {
+    if (!isApplicationAction(row.action)) return false;
+    if (row.action !== "applied (manual)") return true;
+    const undo = row.jobId ? undoneAt.get(row.jobId) : undefined;
+    return undo === undefined || row.createdAt > undo;
+  });
+}
+
+/** Count of standing applications at or after `since` (the daily cap). */
+export function countApplicationsSince(
+  activity: ActivityLike[],
+  since: number,
+): number {
+  return applicationEvents(activity).filter((row) => row.createdAt >= since)
+    .length;
+}
+
 /**
  * Turn the audit trail into the history the cooldown needs.
  * The organization recorded on the row wins; if an older row predates that
@@ -132,8 +168,7 @@ export function buildPriorApplications(args: {
   since?: number;
 }): PriorApplication[] {
   const prior: PriorApplication[] = [];
-  for (const row of args.activity) {
-    if (!isApplicationAction(row.action)) continue;
+  for (const row of applicationEvents(args.activity)) {
     if (args.since !== undefined && row.createdAt < args.since) continue;
     const organization =
       row.organization ??

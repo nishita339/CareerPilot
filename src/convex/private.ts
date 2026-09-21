@@ -8,7 +8,10 @@ import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { scoreMatch } from "./matcher";
 import { isBlacklisted, isDuplicate, parseBlacklist } from "./dedupe";
-import { buildPriorApplications, isApplicationAction } from "./cooldown";
+import {
+  buildPriorApplications,
+  countApplicationsSince,
+} from "./cooldown";
 import { isDueWithin, parseDeadlineValue, daysUntil } from "./deadlines";
 
 /* ------------------------------- raw jobs -------------------------------- */
@@ -168,9 +171,7 @@ export const getApplyContext = internalQuery({
         jobId: a.jobId ? String(a.jobId) : undefined,
       });
     }
-    const sentToday = activity.filter(
-      (a) => isApplicationAction(a.action) && a.createdAt >= startOfDay.getTime(),
-    ).length;
+    const sentToday = countApplicationsSince(activity, startOfDay.getTime());
     const prior = buildPriorApplications({
       activity,
       organizationByJobId: orgByJob,
