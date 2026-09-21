@@ -6,6 +6,7 @@ import {
   SHEET_NAMES,
   type ExportJob,
 } from "../src/convex/xlsx";
+import { inflateSync } from "node:zlib";
 import { PDFDocument } from "pdf-lib";
 import { buildResumePdfBytes, resumePdfFilename } from "../src/convex/pdf";
 import { buildResumeDoc } from "../src/convex/resume";
@@ -50,6 +51,168 @@ const profile = {
   minMatchScore: 70,
   maxApplicationsPerDay: 10,
 };
+
+/**
+ * Minimal PDF text extractor used to prove the resume is machine-readable:
+ * inflates each content stream and replays its text-showing operators in order.
+ * This is a stand-in for what an ATS text extractor does.
+ */
+function extractPdfText(bytes: Uint8Array): string {
+  const latin = Buffer.from(bytes).toString("latin1");
+  const streams = collectStreams(latin);
+  const pieces: string[] = [];
+
+  for (const stream of streams) {
+    // Only content streams hold text objects; font/xref/object streams are
+    // binary and would otherwise contribute noise.
+    if (!stream.includes("BT")) continue;
+    let cursor = 0;
+    while (cursor < stream.length) {
+      const tj = stream.indexOf("Tj", cursor);
+      if (tj === -1) break;
+      // The operand right before Tj is either a hex string <41 42> or a
+      // literal string (AB) — pdf-lib emits hex for standard-font text.
+      const before = stream.slice(0, tj).replace(/\s+$/, "");
+      if (before.endsWith(">")) {
+        const open = before.lastIndexOf("<");
+        if (open !== -1) pieces.push(decodeHexString(before.slice(open + 1, -1)));
+      } else if (before.endsWith(")")) {
+        const open = before.lastIndexOf("(");
+        if (open !== -1)
+          pieces.push(toWinAnsi(decodePdfString(before.slice(open + 1, -1))));
+      }
+      cursor = tj + 2;
+    }
+  }
+  return pieces.join("\n");
+}
+
+/** Hex string literal: one byte per char, or UTF-16BE when it starts with FEFF. */
+function decodeHexString(hex: string): string {
+  const clean = hex.replace(/\s+/g, "");
+  if (clean.length % 2 !== 0) return "";
+  const bytes = Buffer.from(clean, "hex");
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return bytes.subarray(2).toString("utf16le").swap16();
+  }
+  return toWinAnsi(bytes.toString("latin1"));
+}
+
+/**
+ * WinAnsiEncoding slots that differ from Latin-1. A real extractor applies this
+ * table, otherwise typography like an em dash (0x97) reads as a control code.
+ */
+const WIN_ANSI: Record<number, string> = {
+  0x82: "\u201A",
+  0x83: "\u0192",
+  0x84: "\u201E",
+  0x85: "\u2026",
+  0x86: "\u2020",
+  0x87: "\u2021",
+  0x88: "\u02C6",
+  0x89: "\u2030",
+  0x8a: "\u0160",
+  0x8b: "\u2039",
+  0x8c: "\u0152",
+  0x8e: "\u017D",
+  0x91: "\u2018",
+  0x92: "\u2019",
+  0x93: "\u201C",
+  0x94: "\u201D",
+  0x95: "\u2022",
+  0x96: "\u2013",
+  0x97: "\u2014",
+  0x98: "\u02DC",
+  0x99: "\u2122",
+  0x9a: "\u0161",
+  0x9b: "\u203A",
+  0x9c: "\u0153",
+  0x9e: "\u017E",
+  0x9f: "\u0178",
+};
+
+function toWinAnsi(value: string): string {
+  let out = "";
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!;
+    out += WIN_ANSI[code] ?? ch;
+  }
+  return out;
+}
+
+/** Every stream object in the file, inflated when it is Flate-compressed. */
+function collectStreams(latin: string): string[] {
+  const streams: string[] = [];
+  const OPEN = "stream";
+  const CLOSE = "endstream";
+  let cursor = 0;
+
+  while (cursor < latin.length) {
+    const at = latin.indexOf(OPEN, cursor);
+    if (at === -1) break;
+
+    // "stream" must be a standalone token: at line start, followed by an EOL.
+    // (Skipping this check matches the "stream" inside "endstream".)
+    const before = latin[at - 1];
+    const eol = latin.slice(at + OPEN.length, at + OPEN.length + 2);
+    if (before !== "\n" && before !== "\r") {
+      cursor = at + OPEN.length;
+      continue;
+    }
+    if (!eol.startsWith("\n") && !eol.startsWith("\r\n")) {
+      cursor = at + OPEN.length;
+      continue;
+    }
+
+    const bodyStart = at + OPEN.length + (eol.startsWith("\r\n") ? 2 : 1);
+    const end = latin.indexOf(CLOSE, bodyStart);
+    if (end === -1) break;
+
+    const chunk = latin.slice(bodyStart, end).replace(/\r?\n$/, "");
+    try {
+      streams.push(inflateSync(Buffer.from(chunk, "latin1")).toString("latin1"));
+    } catch {
+      streams.push(chunk); // stream was not compressed
+    }
+    cursor = end + CLOSE.length;
+  }
+  return streams;
+}
+
+/** Decode a PDF string literal's escapes the way a reader would. */
+function decodePdfString(value: string): string {
+  const escapes: Record<string, string> = {
+    n: "\n",
+    r: "\r",
+    t: "\t",
+    b: "\b",
+    f: "\f",
+  };
+  let out = "";
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch !== "\\") {
+      out += ch;
+      continue;
+    }
+    const next = value[i + 1];
+    if (next === undefined) break;
+    if (next >= "0" && next <= "7") {
+      let octal = "";
+      let j = i + 1;
+      while (j < value.length && octal.length < 3 && value[j] >= "0" && value[j] <= "7") {
+        octal += value[j];
+        j++;
+      }
+      out += String.fromCharCode(parseInt(octal, 8));
+      i = j - 1;
+      continue;
+    }
+    out += escapes[next] ?? next;
+    i++;
+  }
+  return out;
+}
 
 async function loadWorkbook() {
   const bytes = await buildWorkbookBytes(profile, jobs);
@@ -178,6 +341,33 @@ describe("PDF resume export", () => {
     const loaded = await PDFDocument.load(bytes);
     expect(loaded.getPageCount()).toBeGreaterThanOrEqual(2);
     expect(bytes.length).toBeGreaterThan(800);
+  });
+
+  test("text is extractable in linear order — what an ATS parser reads", async () => {
+    const bytes = await buildResumePdfBytes(doc);
+    const text = extractPdfText(bytes);
+
+    // Contact block and headings are present as real text (not an image).
+    expect(text).toContain("Aarav Sharma");
+    expect(text).toContain("aarav@example.com");
+    expect(text).toContain("EDUCATION");
+    expect(text).toContain("SKILLS");
+    expect(text).toContain("EXPERIENCE & PROJECTS");
+    expect(text).toContain("Analyzed 50k rows of transit data in Python and Pandas");
+
+    // Order is linear: name before sections, education before skills.
+    expect(text.indexOf("Aarav Sharma")).toBeLessThan(text.indexOf("EDUCATION"));
+    expect(text.indexOf("EDUCATION")).toBeLessThan(text.indexOf("SKILLS"));
+    expect(text.indexOf("SKILLS")).toBeLessThan(
+      text.indexOf("EXPERIENCE & PROJECTS"),
+    );
+
+    // No garbled characters: no replacement glyphs and no control characters.
+    // WinAnsi typography (·, —) decodes to the intended punctuation.
+    expect(text).not.toContain("\uFFFD");
+    expect(/\p{C}/u.test(text.replace(/[\n\t]/g, " "))).toBe(false);
+    expect(text).toContain("Computer Science, University of Pune");
+    expect(text).toContain("CS student — data & backend");
   });
 
   test("url-safe filename is derived from org and role", () => {

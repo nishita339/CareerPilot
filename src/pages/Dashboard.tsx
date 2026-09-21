@@ -848,6 +848,7 @@ function ProfileDialog({
   const [demoMode, setDemoMode] = useState(false);
   const [minScore, setMinScore] = useState(70);
   const [dailyCap, setDailyCap] = useState(10);
+  const [cooldownDays, setCooldownDays] = useState(7);
   const [types, setTypes] = useState<string[]>(["job", "internship", "research"]);
   const [saving, setSaving] = useState(false);
 
@@ -880,6 +881,7 @@ function ProfileDialog({
     setDemoMode(profile.demoMode === true);
     setMinScore(profile.minMatchScore);
     setDailyCap(profile.maxApplicationsPerDay);
+    setCooldownDays(profile.cooldownDays ?? 7);
     setTypes(profile.opportunityTypes.length ? profile.opportunityTypes : ["job", "internship", "research"]);
   }, [open, profile]);
 
@@ -913,6 +915,7 @@ function ProfileDialog({
         maxApplicationsPerDay: dailyCap,
         blacklistCompanies: form.blacklistCompanies || undefined,
         demoMode,
+        cooldownDays,
       });
       toast.success("Profile saved — the pipeline will re-score on next run");
       onOpenChange(false);
@@ -1015,6 +1018,16 @@ function ProfileDialog({
           </Field>
           <Field label={`Daily application cap — ${dailyCap} (hard limit 10)`} full>
             <Slider value={[dailyCap]} min={1} max={10} step={1} onValueChange={(v) => setDailyCap(v[0])} />
+          </Field>
+          <Field label={`Per-company cooldown — ${cooldownDays} days (minimum 3)`} full>
+            <Slider value={[cooldownDays]} min={3} max={90} step={1} onValueChange={(v) => setCooldownDays(v[0])} />
+            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+              After you send an application to an organization, further sends to
+              the same employer are blocked for this many days — even across
+              different roles. Company name variants such as “Acme Inc” and
+              “ACME” count as the same employer. Only applications recorded here
+              count; applies you made elsewhere are not visible to the app.
+            </p>
           </Field>
           <Field label="Demo mode" full>
             <div className="flex items-start gap-3">

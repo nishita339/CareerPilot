@@ -17,6 +17,11 @@ interface DigestJob {
   url: string;
 }
 
+interface DueSoonJob extends DigestJob {
+  deadline: string;
+  daysLeft: number;
+}
+
 interface DigestPayload {
   profile: {
     fullName: string;
@@ -26,6 +31,7 @@ interface DigestPayload {
   };
   shortlisted: DigestJob[];
   resumeReady: DigestJob[];
+  dueSoon: DueSoonJob[];
   appliedToday: number;
   totalJobs: number;
 }
@@ -55,6 +61,17 @@ function buildDigestText(p: DigestPayload): string {
     lines.push("Tailored, waiting for your approval:");
     for (const j of p.resumeReady.slice(0, 10)) {
       lines.push(`  • ${j.title} — ${j.organization}`);
+    }
+    lines.push("");
+  }
+  if (p.dueSoon.length) {
+    lines.push("Deadlines in the next 7 days:");
+    for (const j of p.dueSoon) {
+      const when =
+        j.daysLeft <= 0
+          ? "closes today"
+          : `${j.daysLeft} day${j.daysLeft === 1 ? "" : "s"} left`;
+      lines.push(`  • ${j.deadline} (${when})  ${j.title} — ${j.organization}`);
     }
     lines.push("");
   }
@@ -110,7 +127,12 @@ async function runDigest(
 ): Promise<DigestResult> {
   const data = await ctx.runQuery(internal.private.getDigestData, { userId });
   if (!data) return { emailed: false, telegram: false, skipped: "no profile" };
-  if (!force && data.shortlisted.length === 0 && data.resumeReady.length === 0) {
+  if (
+    !force &&
+    data.shortlisted.length === 0 &&
+    data.resumeReady.length === 0 &&
+    data.dueSoon.length === 0
+  ) {
     return { emailed: false, telegram: false, skipped: "nothing new" };
   }
 
@@ -120,7 +142,10 @@ async function runDigest(
   if (to && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
     const result = await vly.email.send({
       to,
-      subject: `CareerPilot digest — ${data.shortlisted.length} shortlisted, ${data.resumeReady.length} awaiting approval`,
+      subject:
+        `CareerPilot digest — ${data.shortlisted.length} shortlisted, ` +
+        `${data.resumeReady.length} awaiting approval` +
+        (data.dueSoon.length ? `, ${data.dueSoon.length} closing soon` : ""),
       text,
       html: `<pre style="font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.55;white-space:pre-wrap">${text
         .replace(/&/g, "&amp;")

@@ -48,6 +48,8 @@ export default defineSchema({
     /** Demo mode: include sample listings so the pipeline can be explored
      *  without configuring any collector API keys. Off by default. */
     demoMode: v.optional(v.boolean()),
+    /** Per-company cooldown window in days (clamped to 3-90). */
+    cooldownDays: v.optional(v.number()),
     lastDigestAt: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
@@ -95,6 +97,9 @@ export default defineSchema({
     jobId: v.optional(v.id("jobs")),
     action: v.string(),
     detail: v.optional(v.string()),
+    /** Organization at the time of the action — powers the company cooldown
+     *  even if the listing row is later deleted. */
+    organization: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_user", ["userId"]),
 });

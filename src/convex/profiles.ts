@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { GUARDRAILS } from "./policy";
 import { parseSkillList } from "./skills";
+import { clampCooldownDays } from "./cooldown";
 
 export const getProfile = query({
   args: {},
@@ -42,6 +43,7 @@ export const saveProfile = mutation({
     maxApplicationsPerDay: v.number(),
     blacklistCompanies: v.optional(v.string()),
     demoMode: v.optional(v.boolean()),
+    cooldownDays: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -64,6 +66,7 @@ export const saveProfile = mutation({
         Math.max(1, Math.round(args.maxApplicationsPerDay)),
       ),
       demoMode: args.demoMode === true,
+      cooldownDays: clampCooldownDays(args.cooldownDays),
       updatedAt: Date.now(),
     };
     const existing = await ctx.db

@@ -14,6 +14,7 @@ did, and prepares applications that **you** approve before anything is sent.
 | Resumes never invent skills, employers or metrics | `src/convex/validator.ts` + `tailor.ts` prompt rules |
 | Email applications send only after explicit approval; web forms stay manual | `src/convex/apply.ts` gates |
 | Daily cap (default 10, hard ceiling), min match score (default 70, floor 50) | `src/convex/policy.ts`, clamped in `profiles.saveProfile` |
+| One application per company per window (default 7 days, floor 3) | `src/convex/cooldown.ts` + the gate in `apply.ts` |
 | Secrets stay in the deployment environment; the LLM model name is config | `process.env` reads in `collectors.ts` / `tailor.ts` |
 
 ## How it flows
@@ -75,10 +76,25 @@ Both export builders live in pure modules (`pdf.ts`, `xlsx.ts`) with no Convex
 dependencies, so the test suite builds a real PDF and a real workbook and
 asserts their structure.
 
+## Company cooldown
+
+`checkCooldown` blocks a send when you already applied to the same employer
+inside the window. Organization names are normalized first (legal suffixes and
+parentheticals stripped, so "Acme Inc" and "ACME" are one company) and the
+*matching* rule is deliberately conservative: normalized names must match, or the
+shorter name's words must be a subset of the longer one with at least two words,
+so "Acme" never swallows "Acme Cloud" or "Acme Foods". Only applications this
+app recorded can trigger it — applies you made elsewhere are invisible by
+design, and the UI says so. The window is configurable in your profile, clamped
+to 3–90 days.
+
 ## Digest and scheduling
 
 `scheduler.dailyPipeline` runs daily at **06:30 UTC** (see `src/convex/crons.ts`):
-collect → ingest/dedupe/score → log → digest. Digests go to the email in your
+collect → ingest/dedupe/score → log → digest. Each digest reports new
+shortlisted matches (highest score first), applications awaiting your approval,
+and **deadlines inside the next 7 days** (parsed from the listing text, with
+open-ended values like "Rolling" ignored). Digests go to the email in your
 profile via the email gateway and, if `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`
 are set, to Telegram. Scheduled runs never send applications.
 
@@ -96,15 +112,19 @@ needs.
 ## Tests
 
 ```bash
-bun test          # 51 tests: matcher, dedupe, validator, resume model, exports, collectors
+bun test          # 73 tests: matcher, dedupe, validator, resume model, exports,
+                  # collectors, company cooldown, deadlines
 bun convex dev --once && bunx tsc -b --noEmit
 ```
 
 The validator tests prove the anti-hallucination gate actually blocks invented
 skills, employers, metrics and AI-slop phrasing. The export tests build a real
-`.xlsx` (verifying all seven sheets, the column order and the summary maths) and
-a real `.pdf` (verifying the `%PDF` container and the one-page layout), so a
-broken export fails CI rather than the user's browser.
+`.xlsx` (all seven sheets, column order, summary maths) and a real `.pdf`, then
+*extract the PDF's text back out* — inflating the content streams and decoding
+WinAnsi — to assert the resume is machine-readable, in linear order, with no
+garbled characters. The cooldown tests cover the four cases that matter (same
+org inside the window, just outside it, a different org, and name variants) plus
+timestamp and clamping edge cases.
 
 ## Privacy — what is stored and how to delete it
 
@@ -121,7 +141,8 @@ Everything lives in **your** Convex deployment, tied to your account.
 - Documents: tailored resume (structured data + HTML) and cover letter for roles
   you chose to tailor, plus validator notes.
 - Audit trail: one timestamped row per action (scoring, tailoring, approval,
-  send, export, digest) — this is what enforces the daily cap.
+  send, export, digest), including the organization name at the time of a send —
+  this is what enforces the daily cap and the company cooldown.
 - Temporary files: generated `.xlsx` / `.pdf` exports in the same deployment's
   file storage.
 

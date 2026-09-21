@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { vly } from "../lib/vly-integrations";
 import { asResumeDoc, renderResumeText } from "./resume";
+import { checkCooldown } from "./cooldown";
 
 const DEMO_EMAIL_DOMAINS =
   /@(demo-lab|acme-demo|nordic-demo|ferrous-demo|cobalt-demo)\.example$/i;
@@ -22,7 +23,7 @@ export const applyEmail = action({
   }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in required.");
-    const { profile, job, sentToday } = await ctx.runQuery(
+    const { profile, job, sentToday, prior } = await ctx.runQuery(
       internal.private.getApplyContext,
       { jobId },
     );
@@ -44,6 +45,17 @@ export const applyEmail = action({
         "Tailor the resume first — flagged claims must be reviewed before sending.",
       );
     }
+    // One application per company per cooldown window (default 7 days, min 3).
+    const cooldown = checkCooldown({
+      organization: job.organization,
+      prior,
+      now: Date.now(),
+      cooldownDays: profile.cooldownDays,
+    });
+    if (cooldown.blocked) {
+      throw new Error(cooldown.reason);
+    }
+
     if (sentToday >= profile.maxApplicationsPerDay) {
       throw new Error(
         `Daily cap reached (${sentToday}/${profile.maxApplicationsPerDay}). Low, slow, targeted volume — try tomorrow.`,

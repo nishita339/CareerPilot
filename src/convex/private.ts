@@ -8,6 +8,7 @@ import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { scoreMatch } from "./matcher";
 import { isBlacklisted, isDuplicate, parseBlacklist } from "./dedupe";
+import { isDueWithin, parseDeadlineValue, daysUntil } from "./deadlines";
 
 /* ------------------------------- raw jobs -------------------------------- */
 
@@ -130,25 +131,35 @@ export const saveTailored = internalMutation({
 
 /* --------------------------------- apply --------------------------------- */
 
-/** One read for the apply flow: profile, job, applications sent today. */
+/**
+ * One read for the apply flow: profile, job, applications sent today, and the
+ * history the company cooldown needs.
+ */
 export const getApplyContext = internalQuery({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in required.");
-    const { profile } = await loadUserData(ctx, userId);
-    const job = await ctx.db.get(jobId);
-    if (!job || job.userId !== userId) throw new Error("Job not found.");
+    const { profile, jobs } = await loadUserData(ctx, userId);
+    const job = jobs.find((j) => j._id === jobId);
+    if (!job) throw new Error("Job not found.");
+
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
+    const orgByJob = new Map(jobs.map((j) => [String(j._id), j.organization]));
+
     let sentToday = 0;
+    const prior: { organization: string; at: number }[] = [];
     for await (const a of ctx.db
       .query("activity")
       .withIndex("by_user", (q) => q.eq("userId", userId))) {
-      if (a.action.startsWith("applied") && a.createdAt >= startOfDay.getTime())
-        sentToday++;
+      if (!a.action.startsWith("applied")) continue;
+      if (a.createdAt >= startOfDay.getTime()) sentToday++;
+      const organization =
+        a.organization ?? (a.jobId ? orgByJob.get(String(a.jobId)) : undefined);
+      if (organization) prior.push({ organization, at: a.createdAt });
     }
-    return { profile, job, sentToday };
+    return { profile, job, sentToday, prior };
   },
 });
 
@@ -162,13 +173,15 @@ export const markApplied = internalMutation({
     if (job.status !== "Approved") {
       throw new Error("Blocked: status changed after approval.");
     }
-    await ctx.db.patch(jobId, { status: "Applied", appliedAt: Date.now() });
+    const now = Date.now();
+    await ctx.db.patch(jobId, { status: "Applied", appliedAt: now });
     await ctx.db.insert("activity", {
       userId,
       jobId,
       action: "applied (email)",
       detail: job.title,
-      createdAt: Date.now(),
+      organization: job.organization,
+      createdAt: now,
     });
   },
 });
@@ -340,7 +353,22 @@ export const getDigestData = internalQuery({
       status: j.status,
       url: j.url,
     });
+    const now = Date.now();
+    const dueSoon = jobs
+      .map((j) => ({ job: j, deadline: parseDeadlineValue(j.deadline, now) }))
+      .filter(
+        (entry): entry is { job: (typeof jobs)[number]; deadline: number } =>
+          entry.deadline !== null && isDueWithin(entry.job.deadline, 7, now),
+      )
+      .sort((a, b) => a.deadline - b.deadline)
+      .slice(0, 10)
+      .map(({ job, deadline }) => ({
+        ...brief(job),
+        deadline: new Date(deadline).toISOString().slice(0, 10),
+        daysLeft: daysUntil(deadline, now),
+      }));
     return {
+      dueSoon,
       profile: {
         fullName: profile.fullName,
         email: profile.email,
