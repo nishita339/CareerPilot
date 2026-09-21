@@ -668,13 +668,14 @@ function JobDetail({
             disabled={busy !== null}
             onClick={async () => {
               const r = (await run("send", () => applyEmail({ jobId: job._id }))) as
-                | { sent: boolean; simulated: boolean; to: string }
+                | { sent: boolean; simulated: boolean; to: string; attachedPdf: string | null }
                 | undefined;
               if (r?.sent) {
+                const attachment = r.attachedPdf ? ` with ${r.attachedPdf}` : "";
                 toast.success(
                   r.simulated
-                    ? "Simulated send to demo address — status set to Applied"
-                    : `Application sent to ${r.to}`,
+                    ? `Simulated send to demo address${attachment} — status set to Applied`
+                    : `Application sent to ${r.to}${attachment}`,
                 );
               }
             }}

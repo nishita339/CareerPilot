@@ -68,7 +68,12 @@ by status/type, average score, remaining daily quota and the active policy.
 
 `Download PDF` renders the same structured resume that produced the HTML: single
 column, standard Helvetica, no tables and no images — the shape ATS parsers read
-most reliably.
+most reliably. The identical bytes are attached to approved email applications,
+so what you reviewed in the dashboard is what the recruiter receives.
+
+Both export builders live in pure modules (`pdf.ts`, `xlsx.ts`) with no Convex
+dependencies, so the test suite builds a real PDF and a real workbook and
+asserts their structure.
 
 ## Digest and scheduling
 
@@ -82,15 +87,24 @@ Environment variables: `CAREERPILOT_LLM_MODEL` (default `gpt-4o-mini`),
 `GREENHOUSE_BOARD_TOKENS`, `LEVER_BOARD_TOKENS`, `SEMANTIC_SCHOLAR_API_KEY`,
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
 
+There is deliberately no committed `.env.example`: keys are set through the
+project's Keys tab and read from the deployment environment, so no placeholder
+file can be mistaken for a real one. The dashboard's collector strip shows at a
+glance which sources are active and, on hover, which variable each idle one
+needs.
+
 ## Tests
 
 ```bash
-bun test          # matcher, dedupe, validator, resume model
+bun test          # 51 tests: matcher, dedupe, validator, resume model, exports, collectors
 bun convex dev --once && bunx tsc -b --noEmit
 ```
 
-The validator tests exist to prove the anti-hallucination gate actually blocks
-invented skills, employers, metrics and AI-slop phrasing.
+The validator tests prove the anti-hallucination gate actually blocks invented
+skills, employers, metrics and AI-slop phrasing. The export tests build a real
+`.xlsx` (verifying all seven sheets, the column order and the summary maths) and
+a real `.pdf` (verifying the `%PDF` container and the one-page layout), so a
+broken export fails CI rather than the user's browser.
 
 ## Privacy — what is stored and how to delete it
 

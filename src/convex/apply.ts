@@ -14,7 +14,12 @@ export const applyEmail = action({
   handler: async (
     ctx,
     { jobId },
-  ): Promise<{ sent: boolean; simulated: boolean; to: string }> => {
+  ): Promise<{
+    sent: boolean;
+    simulated: boolean;
+    to: string;
+    attachedPdf: string | null;
+  }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in required.");
     const { profile, job, sentToday } = await ctx.runQuery(
@@ -45,6 +50,11 @@ export const applyEmail = action({
       );
     }
 
+    // Attach the same ATS-friendly PDF the user reviewed, when it exists.
+    const pdf = await ctx.runAction(internal.resumePdf.renderResumePdfBase64, {
+      jobId,
+    });
+
     const simulated = DEMO_EMAIL_DOMAINS.test(job.applyEmail);
     if (!simulated) {
       const result = await vly.email.send({
@@ -52,6 +62,9 @@ export const applyEmail = action({
         subject: `Application: ${job.title} — ${profile.fullName}`,
         text: buildPlainText(profile, job),
         html: `<div style="font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5">${job.coverLetterHtml ?? ""}<hr/>${job.resumeHtml}</div>`,
+        attachments: pdf
+          ? [{ filename: pdf.filename, content: pdf.base64, encoding: "base64" }]
+          : undefined,
       });
       if (!result.success) {
         throw new Error(result.error ?? "Email provider rejected the send");
@@ -59,7 +72,12 @@ export const applyEmail = action({
     }
 
     await ctx.runMutation(internal.private.markApplied, { jobId });
-    return { sent: true, simulated, to: job.applyEmail };
+    return {
+      sent: true,
+      simulated,
+      to: job.applyEmail,
+      attachedPdf: pdf?.filename ?? null,
+    };
   },
 });
 
