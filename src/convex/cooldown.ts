@@ -102,6 +102,47 @@ export interface PriorApplication {
   at: number;
 }
 
+/**
+ * Activity rows that count as "an application was submitted".
+ * Both the email sender ("applied (email)") and the manual web-form path
+ * ("applied (manual)") record through here, so the cooldown and the daily cap
+ * honour applies you made by hand as well as ones this app sent.
+ * Note: "applied" is the prefix — anything else (scored, tailored, exported,
+ * digest) must never consume quota.
+ */
+export function isApplicationAction(action: string): boolean {
+  return action.startsWith("applied");
+}
+
+export interface ActivityLike {
+  action: string;
+  createdAt: number;
+  organization?: string;
+  jobId?: string;
+}
+
+/**
+ * Turn the audit trail into the history the cooldown needs.
+ * The organization recorded on the row wins; if an older row predates that
+ * field, fall back to the organization of the job it points at.
+ */
+export function buildPriorApplications(args: {
+  activity: ActivityLike[];
+  organizationByJobId: Map<string, string>;
+  since?: number;
+}): PriorApplication[] {
+  const prior: PriorApplication[] = [];
+  for (const row of args.activity) {
+    if (!isApplicationAction(row.action)) continue;
+    if (args.since !== undefined && row.createdAt < args.since) continue;
+    const organization =
+      row.organization ??
+      (row.jobId ? args.organizationByJobId.get(String(row.jobId)) : undefined);
+    if (organization) prior.push({ organization, at: row.createdAt });
+  }
+  return prior;
+}
+
 export interface CooldownDecision {
   blocked: boolean;
   /** Human-readable reason shown in the UI when blocked. */

@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { GUARDRAILS } from "./policy";
 import { parseSkillList } from "./skills";
 import { clampCooldownDays } from "./cooldown";
+import { clampDigestHourUtc } from "./schedule";
 
 export const getProfile = query({
   args: {},
@@ -44,6 +45,8 @@ export const saveProfile = mutation({
     blacklistCompanies: v.optional(v.string()),
     demoMode: v.optional(v.boolean()),
     cooldownDays: v.optional(v.number()),
+    /** Hour (UTC) for the daily collect + score + digest run; cron fires at :30. */
+    digestHourUtc: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -67,6 +70,7 @@ export const saveProfile = mutation({
       ),
       demoMode: args.demoMode === true,
       cooldownDays: clampCooldownDays(args.cooldownDays),
+      digestHourUtc: clampDigestHourUtc(args.digestHourUtc),
       updatedAt: Date.now(),
     };
     const existing = await ctx.db

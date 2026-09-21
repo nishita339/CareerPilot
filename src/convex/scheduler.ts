@@ -1,9 +1,12 @@
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { COLLECTORS, collectDemoBoard, type RawJob } from "./collectors";
+import { shouldRunForProfile } from "./schedule";
 
 export interface DailyRunReport {
   users: number;
+  ran: number;
+  skipped: number;
   inserted: number;
   scored: number;
   digests: number;
@@ -11,16 +14,25 @@ export interface DailyRunReport {
 }
 
 /**
- * Daily scheduled pipeline: for every profile — collect from the configured
- * public sources, ingest (dedupe + blacklist + score), then send that user's
- * digest. Runs unattended, so it stays deliberately small and polite:
- * collectors are capped per source and a failure in one never blocks the rest.
+ * Daily scheduled pipeline: for every profile whose chosen hour has arrived —
+ * collect from the configured public sources, ingest (dedupe + blacklist +
+ * score), then send that user's digest. Runs unattended, so it stays
+ * deliberately small and polite: collectors are capped per source and a
+ * failure in one never blocks the rest.
+ *
+ * The cron itself fires hourly at :30 (Convex cron expressions are static), so
+ * each profile's own hour — configurable in the profile, default 06:30 UTC —
+ * selects which of those passes does the work. `lastDigestAt` prevents a second
+ * run in the same day.
  */
 export const dailyPipeline = internalAction({
   args: {},
   handler: async (ctx): Promise<DailyRunReport> => {
     const profiles = await ctx.runQuery(internal.private.listProfiles, {});
+    const now = Date.now();
     const errors: string[] = [];
+    let ran = 0;
+    let skipped = 0;
     let inserted = 0;
     let scored = 0;
     let digests = 0;
@@ -29,6 +41,17 @@ export const dailyPipeline = internalAction({
     const cache = new Map<string, RawJob[]>();
 
     for (const profile of profiles) {
+      const decision = shouldRunForProfile({
+        now,
+        digestHourUtc: profile.digestHourUtc,
+        lastDigestAt: profile.lastDigestAt,
+      });
+      if (!decision.run) {
+        skipped++;
+        continue;
+      }
+      ran++;
+
       const terms = (profile.targetRoles.filter(Boolean).length
         ? profile.targetRoles
         : ["software engineer"]
@@ -71,7 +94,7 @@ export const dailyPipeline = internalAction({
         await ctx.runMutation(internal.private.logActivity, {
           userId: profile.userId,
           action: "scheduled daily run",
-          detail: `${result.inserted} new · ${scoreResult.scored} rescored · ${scoreResult.shortlisted} shortlisted`,
+          detail: `${result.inserted} new · ${scoreResult.scored} rescored · ${scoreResult.shortlisted} shortlisted · ${decision.hourUtc}:30 UTC`,
         });
 
         const digest = await ctx.runAction(internal.digest.sendDigestForUser, {
@@ -83,6 +106,14 @@ export const dailyPipeline = internalAction({
       }
     }
 
-    return { users: profiles.length, inserted, scored, digests, errors };
+    return {
+      users: profiles.length,
+      ran,
+      skipped,
+      inserted,
+      scored,
+      digests,
+      errors,
+    };
   },
 });

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildPriorApplications,
   checkCooldown,
   clampCooldownDays,
   COOLDOWN_DEFAULTS,
+  isApplicationAction,
   normalizeOrgName,
   sameCompany,
 } from "../src/convex/cooldown";
@@ -150,5 +152,93 @@ describe("clampCooldownDays", () => {
     expect(clampCooldownDays(7)).toBe(7);
     expect(clampCooldownDays(500)).toBe(COOLDOWN_DEFAULTS.MAX_DAYS);
     expect(clampCooldownDays(Number.NaN)).toBe(COOLDOWN_DEFAULTS.DEFAULT_DAYS);
+  });
+});
+
+describe("buildPriorApplications (audit trail -> cooldown history)", () => {
+  const jobOrgs = new Map([
+    ["job_email", "Acme Cloud"],
+    ["job_manual", "Handshake Labs"],
+    ["job_legacy", "Globex"],
+  ]);
+
+  const activity = [
+    // Sent by CareerPilot after approval.
+    {
+      action: "applied (email)",
+      createdAt: NOW - 5 * DAY,
+      organization: "Acme Cloud",
+      jobId: "job_email",
+    },
+    // Submitted by hand on the employer's site and recorded in the app.
+    {
+      action: "applied (manual)",
+      createdAt: NOW - 2 * DAY,
+      organization: "Handshake Labs",
+      jobId: "job_manual",
+    },
+    // Row written before the organization field existed: fall back to the job.
+    { action: "applied (email)", createdAt: NOW - 20 * DAY, jobId: "job_legacy" },
+    // Everything below must never consume cooldown or quota.
+    { action: "tailored (v2, validated)", createdAt: NOW - 4 * DAY, jobId: "job_email" },
+    { action: "status → Approved", createdAt: NOW - 3 * DAY, jobId: "job_manual" },
+    { action: "scored", createdAt: NOW - 1 * DAY },
+    { action: "scheduled daily run", createdAt: NOW - 1 * DAY },
+    { action: "exported resume PDF", createdAt: NOW - 1 * DAY, jobId: "job_manual" },
+  ];
+
+  test("counts hand-submitted applications exactly like emailed ones", () => {
+    const prior = buildPriorApplications({ activity, organizationByJobId: jobOrgs });
+    expect(prior).toHaveLength(3);
+    expect(prior.map((p) => p.organization)).toEqual([
+      "Acme Cloud",
+      "Handshake Labs",
+      "Globex",
+    ]);
+    expect(prior.every((p) => p.at > 0)).toBe(true);
+  });
+
+  test("a manual apply inside the window blocks the same company", () => {
+    const prior = buildPriorApplications({ activity, organizationByJobId: jobOrgs });
+    const decision = checkCooldown({
+      organization: "Handshake Labs (demo)",
+      prior,
+      now: NOW,
+    });
+    expect(decision.blocked).toBe(true);
+    expect(decision.lastAppliedAt).toBe(NOW - 2 * DAY);
+    expect(decision.reason).toContain("Handshake Labs (demo)");
+  });
+
+  test("a manual apply outside the window is allowed", () => {
+    const prior = buildPriorApplications({ activity, organizationByJobId: jobOrgs });
+    const decision = checkCooldown({ organization: "Handshake Labs", prior, now: NOW + 6 * DAY });
+    expect(decision.blocked).toBe(false);
+  });
+
+  test("only applied* actions are applications", () => {
+    expect(isApplicationAction("applied (email)")).toBe(true);
+    expect(isApplicationAction("applied (manual)")).toBe(true);
+    expect(isApplicationAction("tailored (v1, validated)")).toBe(false);
+    expect(isApplicationAction("status → Approved")).toBe(false);
+  });
+
+  test("non-application rows never count", () => {
+    const prior = buildPriorApplications({
+      activity: activity.filter((a) => !a.action.startsWith("applied")),
+      organizationByJobId: jobOrgs,
+    });
+    expect(prior).toEqual([]);
+  });
+
+  test("a since-window filters by timestamp (daily quota semantics)", () => {
+    const prior = buildPriorApplications({
+      activity,
+      organizationByJobId: jobOrgs,
+      since: NOW - 3 * DAY,
+    });
+    expect(prior).toEqual([
+      { organization: "Handshake Labs", at: NOW - 2 * DAY },
+    ]);
   });
 });

@@ -8,12 +8,20 @@ import { similarity } from "./skills";
 const ALLOWED = new Set<string>(PIPELINE_STATUSES);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function log(ctx: any, userId: any, action: string, jobId?: any, detail?: string) {
+async function log(
+  ctx: any,
+  userId: any,
+  action: string,
+  jobId?: any,
+  detail?: string,
+  organization?: string,
+) {
   await ctx.db.insert("activity", {
     userId,
     jobId: jobId ?? undefined,
     action,
     detail: detail ?? undefined,
+    organization: organization ?? undefined,
     createdAt: Date.now(),
   });
 }
@@ -138,7 +146,7 @@ export const addManualJob = mutation({
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .unique();
     const applyMode =
-      args.applyEmail && /.+@.+\..+/.test(args.applyEmail) ? "email" : "manual";
+      args.applyEmail && /.+@.+\..+/.test(args.applyEmail) ? "email" : "form";
     const jobId = await ctx.db.insert("jobs", {
       userId,
       source: "Manual",
@@ -170,6 +178,28 @@ export const addManualJob = mutation({
     }
     await log(ctx, userId, "added", jobId, args.title);
     return jobId;
+  },
+});
+
+/**
+ * Human override: you submitted this one yourself on the employer's site.
+ * Recording it matters — the daily cap and the company cooldown read the audit
+ * trail, so a hand-submitted application must appear there too.
+ */
+export const markAppliedManually = mutation({
+  args: { jobId: v.id("jobs") },
+  handler: async (ctx, { jobId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Sign in required.");
+    const job = await ctx.db.get(jobId);
+    if (!job || job.userId !== userId) throw new Error("Job not found.");
+    if (["Applied", "Interview", "Offer"].includes(job.status)) {
+      throw new Error(`Already recorded as "${job.status}".`);
+    }
+    const now = Date.now();
+    await ctx.db.patch(jobId, { status: "Applied", appliedAt: now });
+    await log(ctx, userId, "applied (manual)", jobId, job.title, job.organization);
+    return { ok: true, appliedAt: now };
   },
 });
 

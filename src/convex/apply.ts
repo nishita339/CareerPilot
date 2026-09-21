@@ -20,6 +20,7 @@ export const applyEmail = action({
     simulated: boolean;
     to: string;
     attachedPdf: string | null;
+    warnings: string[];
   }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in required.");
@@ -89,6 +90,7 @@ export const applyEmail = action({
       simulated,
       to: job.applyEmail,
       attachedPdf: pdf?.filename ?? null,
+      warnings: pdf?.warnings ?? [],
     };
   },
 });

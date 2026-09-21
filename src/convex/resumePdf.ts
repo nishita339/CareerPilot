@@ -5,11 +5,13 @@ import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { asResumeDoc } from "./resume";
-import { buildResumePdfBytes, resumePdfFilename } from "./pdf";
+import { buildResumePdf, pdfWarnings, resumePdfFilename } from "./pdf";
 
 export interface PdfExportResult {
   url: string | null;
   filename: string;
+  /** Non-fatal notes, e.g. characters adjusted for the Latin-only PDF font. */
+  warnings: string[];
 }
 
 /** Public: build the PDF, store it, hand back a download URL. */
@@ -27,10 +29,10 @@ export const exportResumePdf = action({
       throw new Error("Tailor the resume first — there is no PDF to export yet.");
     }
 
-    const bytes = await buildResumePdfBytes(doc);
+    const built = await buildResumePdf(doc);
     const filename = resumePdfFilename(job.organization, job.title);
     const storageId = await ctx.storage.store(
-      new Blob([bytes as unknown as BlobPart], { type: "application/pdf" }),
+      new Blob([built.bytes as unknown as BlobPart], { type: "application/pdf" }),
     );
     const url = await ctx.storage.getUrl(storageId);
 
@@ -41,7 +43,7 @@ export const exportResumePdf = action({
       detail: job.title,
     });
 
-    return { url, filename };
+    return { url, filename, warnings: pdfWarnings(built) };
   },
 });
 
@@ -51,7 +53,7 @@ export const renderResumePdfBase64 = internalAction({
   handler: async (
     ctx,
     { jobId },
-  ): Promise<{ base64: string; filename: string } | null> => {
+  ): Promise<{ base64: string; filename: string; warnings: string[] } | null> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in required.");
     const { job } = await ctx.runQuery(internal.private.getProfileAndJob, {
@@ -60,10 +62,11 @@ export const renderResumePdfBase64 = internalAction({
     if (!job) return null;
     const doc = asResumeDoc(job.resumeData);
     if (!doc) return null;
-    const bytes = await buildResumePdfBytes(doc);
+    const built = await buildResumePdf(doc);
     return {
-      base64: Buffer.from(bytes).toString("base64"),
+      base64: Buffer.from(built.bytes).toString("base64"),
       filename: resumePdfFilename(job.organization, job.title),
+      warnings: pdfWarnings(built),
     };
   },
 });

@@ -50,6 +50,9 @@ export default defineSchema({
     demoMode: v.optional(v.boolean()),
     /** Per-company cooldown window in days (clamped to 3-90). */
     cooldownDays: v.optional(v.number()),
+    /** Preferred hour (UTC, 0-23) for the daily collect + score + digest run.
+     *  The cron fires hourly at :30 and only runs profiles whose hour matches. */
+    digestHourUtc: v.optional(v.number()),
     lastDigestAt: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
@@ -67,7 +70,7 @@ export default defineSchema({
     opportunityType: v.string(), // job | internship | research | fellowship
     description: v.optional(v.string()),
     applyEmail: v.optional(v.string()),
-    applyMode: v.string(), // email | manual | url
+    applyMode: v.string(), // email | form | url  ("manual" is a legacy value for form)
     publishedAt: v.optional(v.number()),
     status: v.string(), // New | Shortlisted | Resume Ready | Approved | Applied | Interview | Offer | Rejected | Rejected - below score | Skipped - blacklist
     matchScore: v.optional(v.number()),

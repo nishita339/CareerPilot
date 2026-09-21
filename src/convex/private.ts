@@ -8,6 +8,7 @@ import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { scoreMatch } from "./matcher";
 import { isBlacklisted, isDuplicate, parseBlacklist } from "./dedupe";
+import { buildPriorApplications, isApplicationAction } from "./cooldown";
 import { isDueWithin, parseDeadlineValue, daysUntil } from "./deadlines";
 
 /* ------------------------------- raw jobs -------------------------------- */
@@ -148,17 +149,32 @@ export const getApplyContext = internalQuery({
     startOfDay.setHours(0, 0, 0, 0);
     const orgByJob = new Map(jobs.map((j) => [String(j._id), j.organization]));
 
-    let sentToday = 0;
-    const prior: { organization: string; at: number }[] = [];
+    // The audit trail is the single source of truth for both the daily cap and
+    // the company cooldown, so applies recorded by hand count exactly like
+    // ones this app sent.
+    const activity: {
+      action: string;
+      createdAt: number;
+      organization?: string;
+      jobId?: string;
+    }[] = [];
     for await (const a of ctx.db
       .query("activity")
       .withIndex("by_user", (q) => q.eq("userId", userId))) {
-      if (!a.action.startsWith("applied")) continue;
-      if (a.createdAt >= startOfDay.getTime()) sentToday++;
-      const organization =
-        a.organization ?? (a.jobId ? orgByJob.get(String(a.jobId)) : undefined);
-      if (organization) prior.push({ organization, at: a.createdAt });
+      activity.push({
+        action: a.action,
+        createdAt: a.createdAt,
+        organization: a.organization,
+        jobId: a.jobId ? String(a.jobId) : undefined,
+      });
     }
+    const sentToday = activity.filter(
+      (a) => isApplicationAction(a.action) && a.createdAt >= startOfDay.getTime(),
+    ).length;
+    const prior = buildPriorApplications({
+      activity,
+      organizationByJobId: orgByJob,
+    });
     return { profile, job, sentToday, prior };
   },
 });
@@ -245,7 +261,7 @@ async function ingestForUser(
       opportunityType: raw.opportunityType,
       description: raw.description,
       applyEmail: raw.applyEmail,
-      applyMode: raw.applyEmail ? "email" : "manual",
+      applyMode: raw.applyEmail ? "email" : "form",
       status: "New",
       deadline: raw.deadline,
       scrapedAt: Date.now(),

@@ -36,6 +36,20 @@ export interface TailoredContent {
   bullets: string[];
 }
 
+/** Plain-text rendering of generated HTML (email bodies, copy-to-form fields). */
+export function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<li>/g, "• ")
+    .replace(/<br\s*\/?>/g, "\n")
+    .replace(/<\/p>/g, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")

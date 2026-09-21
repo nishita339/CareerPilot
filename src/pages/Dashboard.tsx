@@ -24,6 +24,8 @@ import { toast } from "sonner";
 import {
   Activity,
   Check,
+  ClipboardList,
+  Copy,
   Download,
   FileDown,
   FileText,
@@ -44,6 +46,7 @@ import {
   X,
 } from "lucide-react";
 import { useNavigate } from "react-router";
+import { asResumeDoc, htmlToPlainText, renderResumeText } from "@/convex/resume";
 
 type Job = Doc<"jobs">;
 
@@ -70,6 +73,40 @@ function statusBadge(status: string) {
       {status}
     </Badge>
   );
+}
+
+const APPLIED_STATUSES = ["Applied", "Interview", "Offer"];
+
+/** Has an application for this role already gone out (by us or by hand)? */
+function alreadyApplied(status: string): boolean {
+  return APPLIED_STATUSES.includes(status);
+}
+
+/** The scheduled run fires hourly at :30 — show the chosen hour in local time. */
+function localDigestTime(hourUtc: number): string {
+  const d = new Date();
+  d.setUTCHours(hourUtc, 30, 0, 0);
+  return d.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+}
+
+const DIGEST_HOURS = Array.from({ length: 24 }, (_, h) => h);
+
+/** Clipboard with an honest failure message (browsers can block the API). */
+async function copyText(text: string, what: string) {
+  if (!text.trim()) {
+    toast.error(`Nothing to copy for ${what}`);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast.success(`${what} copied`);
+  } catch {
+    toast.error("Clipboard blocked — select the text and copy it manually");
+  }
 }
 
 function scoreColor(score?: number) {
@@ -536,6 +573,7 @@ function JobDetail({
   const exportPdf = useAction(api.resumePdf.exportResumePdf);
   const applyEmail = useAction(api.apply.applyEmail);
   const reopen = useMutation(api.apply.reopen);
+  const markManual = useMutation(api.jobs.markAppliedManually);
 
   const [notes, setNotes] = useState(job.notes ?? "");
   const [busy, setBusy] = useState<string | null>(null);
@@ -668,7 +706,13 @@ function JobDetail({
             disabled={busy !== null}
             onClick={async () => {
               const r = (await run("send", () => applyEmail({ jobId: job._id }))) as
-                | { sent: boolean; simulated: boolean; to: string; attachedPdf: string | null }
+                | {
+                    sent: boolean;
+                    simulated: boolean;
+                    to: string;
+                    attachedPdf: string | null;
+                    warnings: string[];
+                  }
                 | undefined;
               if (r?.sent) {
                 const attachment = r.attachedPdf ? ` with ${r.attachedPdf}` : "";
@@ -677,6 +721,7 @@ function JobDetail({
                     ? `Simulated send to demo address${attachment} — status set to Applied`
                     : `Application sent to ${r.to}${attachment}`,
                 );
+                for (const w of r.warnings) toast.warning(w);
               }
             }}
           >
@@ -687,7 +732,13 @@ function JobDetail({
         {canApprove && job.applyMode !== "email" && (
           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
             <TriangleAlert className="size-3.5" />
-            Manual apply — open the listing and submit yourself
+            Approve to record your decision, then submit by hand with the kit below
+          </span>
+        )}
+        {alreadyApplied(job.status) && job.applyMode !== "email" && (
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Check className="size-3.5 text-primary" />
+            Submitted by you — recorded in the audit trail
           </span>
         )}
         {["Rejected", "Skipped", "New", "Resume Ready"].includes(job.status) && (
@@ -713,6 +764,16 @@ function JobDetail({
           Re-score all
         </Button>
       </div>
+
+      {/* Application kit — web-form roles only */}
+      {job.applyMode !== "email" && (
+        <ApplicationKit
+          job={job}
+          onMarkApplied={() =>
+            run("manual", () => markManual({ jobId: job._id }), "Recorded as Applied")
+          }
+        />
+      )}
 
       {/* Validation banner */}
       {job.validationNotes && (
@@ -744,8 +805,9 @@ function JobDetail({
                 disabled={busy !== null}
                 onClick={async () => {
                   const r = (await run("pdf", () => exportPdf({ jobId: job._id }))) as
-                    | { url: string | null; filename: string }
+                    | { url: string | null; filename: string; warnings: string[] }
                     | undefined;
+                  for (const w of r?.warnings ?? []) toast.warning(w, { duration: 9000 });
                   if (r?.url) {
                     const a = document.createElement("a");
                     a.href = r.url;
@@ -828,6 +890,218 @@ function JobDetail({
   );
 }
 
+/* ---------------- Application kit (web-form roles) ---------------- */
+
+/**
+ * Copy-and-paste helpers for roles applied to on the employer's own site.
+ * There is deliberately no browser automation here: the app hands you the
+ * fields, the cover letter and the ATS PDF, and you press Submit yourself.
+ */
+function ApplicationKit({
+  job,
+  onMarkApplied,
+}: {
+  job: Job;
+  onMarkApplied: () => Promise<unknown>;
+}) {
+  const profile = useQuery(api.profiles.getProfile);
+  const exportPdf = useAction(api.resumePdf.exportResumePdf);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const doc = asResumeDoc(job.resumeData);
+  const resumeText = doc
+    ? renderResumeText(doc)
+    : htmlToPlainText(job.resumeHtml ?? "");
+  const coverLetter = htmlToPlainText(job.coverLetterHtml ?? "");
+
+  const fields: [string, string][] = profile
+    ? [
+        ["Full name", profile.fullName],
+        ["Email", profile.email],
+        ["Phone", profile.phone],
+        ["Location", profile.location],
+        ["Links", profile.links ?? ""],
+        [
+          "Education",
+          `${profile.major}, ${profile.university} (${profile.graduationYear})${profile.gpa ? ` · GPA ${profile.gpa}` : ""}`,
+        ],
+        ["Skills", (profile.skills ?? []).join(", ")],
+      ]
+    : [];
+
+  const downloadPdf = async () => {
+    setBusy("pdf");
+    try {
+      const r = await exportPdf({ jobId: job._id });
+      for (const w of r.warnings) toast.warning(w, { duration: 9000 });
+      if (r.url) {
+        const a = document.createElement("a");
+        a.href = r.url;
+        a.download = r.filename;
+        a.target = "_blank";
+        a.rel = "noreferrer";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        toast.success(`Generated ${r.filename}`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "PDF export failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const copyAll = () =>
+    copyText(
+      [
+        `Application — ${job.title} at ${job.organization}`,
+        "",
+        ...fields.map(([label, value]) => `${label}: ${value}`),
+        ...(coverLetter ? ["", "Cover letter:", coverLetter] : []),
+      ].join("\n"),
+      "Application kit",
+    );
+
+  const appliedAlready = alreadyApplied(job.status);
+
+  return (
+    <div className="border-b border-border px-5 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <ClipboardList className="size-3.5 text-muted-foreground" />
+          <span className="micro-label">Application kit — you submit this one</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground disabled:opacity-50"
+            disabled={busy !== null || !job.resumeData}
+            title={
+              job.resumeData
+                ? "Download the ATS PDF to upload"
+                : "Tailor the resume first — there is no PDF yet"
+            }
+            onClick={downloadPdf}
+          >
+            {busy === "pdf" ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <FileDown className="size-3" />
+            )}
+            Download PDF
+          </button>
+          <button
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            onClick={copyAll}
+          >
+            <Copy className="size-3" />
+            Copy all fields
+          </button>
+        </div>
+      </div>
+
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        Paste these into the employer&apos;s form, upload the PDF and press
+        Submit yourself. CareerPilot never fills or submits web forms, and never
+        signs into a listing site.
+      </p>
+
+      {fields.length === 0 ? (
+        <p className="mt-3 text-sm text-muted-foreground">
+          Complete your Master Profile to fill this kit.
+        </p>
+      ) : (
+        <div className="mt-3 border border-border">
+          {fields.map(([label, value]) => (
+            <div
+              key={label}
+              className="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0"
+            >
+              <span className="w-24 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+                {label}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm">{value || "—"}</span>
+              <button
+                title={`Copy ${label}`}
+                className="shrink-0 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+                disabled={!value}
+                onClick={() => copyText(value, label)}
+              >
+                <Copy className="size-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {coverLetter && (
+        <div className="mt-4">
+          <div className="flex items-center justify-between gap-3">
+            <span className="micro-label">Cover letter (plain text)</span>
+            <button
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              onClick={() => copyText(coverLetter, "Cover letter")}
+            >
+              <Copy className="size-3" />
+              Copy
+            </button>
+          </div>
+          <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap border border-border px-3 py-2 text-[12.5px] leading-5 text-muted-foreground">
+            {coverLetter}
+          </pre>
+        </div>
+      )}
+
+      {resumeText && (
+        <div className="mt-4">
+          <div className="flex items-center justify-between gap-3">
+            <span className="micro-label">Resume (plain text)</span>
+            <button
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              onClick={() => copyText(resumeText, "Resume text")}
+            >
+              <Copy className="size-3" />
+              Copy
+            </button>
+          </div>
+          <pre className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap border border-border px-3 py-2 text-[12.5px] leading-5 text-muted-foreground">
+            {resumeText}
+          </pre>
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 rounded-none"
+          disabled={busy !== null || appliedAlready}
+          onClick={async () => {
+            setBusy("manual");
+            try {
+              await onMarkApplied();
+            } finally {
+              setBusy(null);
+            }
+          }}
+        >
+          {busy === "manual" ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Check className="size-3.5" />
+          )}
+          I submitted this myself
+        </Button>
+        <span className="text-xs leading-5 text-muted-foreground">
+          {appliedAlready
+            ? `Already recorded as ${job.status}.`
+            : "Recording it keeps the daily cap and the company cooldown honest. Approve first if you want your decision in the audit trail."}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- Profile dialog ---------------- */
 
 function ProfileDialog({
@@ -849,6 +1123,7 @@ function ProfileDialog({
   const [minScore, setMinScore] = useState(70);
   const [dailyCap, setDailyCap] = useState(10);
   const [cooldownDays, setCooldownDays] = useState(7);
+  const [digestHour, setDigestHour] = useState(6);
   const [types, setTypes] = useState<string[]>(["job", "internship", "research"]);
   const [saving, setSaving] = useState(false);
 
@@ -882,6 +1157,7 @@ function ProfileDialog({
     setMinScore(profile.minMatchScore);
     setDailyCap(profile.maxApplicationsPerDay);
     setCooldownDays(profile.cooldownDays ?? 7);
+    setDigestHour(profile.digestHourUtc ?? 6);
     setTypes(profile.opportunityTypes.length ? profile.opportunityTypes : ["job", "internship", "research"]);
   }, [open, profile]);
 
@@ -916,6 +1192,7 @@ function ProfileDialog({
         blacklistCompanies: form.blacklistCompanies || undefined,
         demoMode,
         cooldownDays,
+        digestHourUtc: digestHour,
       });
       toast.success("Profile saved — the pipeline will re-score on next run");
       onOpenChange(false);
@@ -1029,6 +1306,28 @@ function ProfileDialog({
               count; applies you made elsewhere are not visible to the app.
             </p>
           </Field>
+          <Field
+            label={`Daily run — ${String(digestHour).padStart(2, "0")}:30 UTC (your time: ${localDigestTime(digestHour)})`}
+            full
+          >
+            <select
+              value={digestHour}
+              onChange={(e) => setDigestHour(Number(e.target.value))}
+              className="h-9 w-full rounded-none border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring"
+            >
+              {DIGEST_HOURS.map((h) => (
+                <option key={h} value={h}>
+                  {String(h).padStart(2, "0")}:30 UTC · {localDigestTime(h)}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+              When the daily collect + score + digest pass runs for you. The
+              scheduler ticks every hour at :30 and only acts on your chosen
+              hour, so nothing else changes. Times are shown in your browser's
+              timezone — the value stored is UTC.
+            </p>
+          </Field>
           <Field label="Demo mode" full>
             <div className="flex items-start gap-3">
               <Switch checked={demoMode} onCheckedChange={setDemoMode} />
@@ -1091,11 +1390,19 @@ const PRIVACY_ROWS: [string, string][] = [
   ],
   [
     "Audit trail",
-    "One row per action — scoring, tailoring, approvals, sends, exports, digests — with a timestamp. This is what enforces the daily cap.",
+    "One row per action — scoring, tailoring, approvals, sends, exports, digests — with a timestamp and, for applications, the organization. This is what enforces the daily cap and the company cooldown.",
   ],
   [
     "Never stored",
     "No platform logins, no cookies from job boards, no payment data, no browsing history, no fingerprinting. No scraping of sites behind a login wall, and no anti-detection tooling exists in this app.",
+  ],
+  [
+    "Web forms",
+    "For roles you apply to on the employer's site, the app only shows you a copy-paste kit and a PDF. It never fills, submits or automates those forms for you.",
+  ],
+  [
+    "PDF encoding",
+    "The generated PDF uses Latin-only standard fonts. Characters outside that set are folded or replaced with '?' and reported to you, so nothing fails silently.",
   ],
   [
     "Where it lives",
