@@ -74,27 +74,37 @@ export function validateClaims(
       );
     }
     // 3. Fabricated-looking numbers: metrics are allowed only if the number
-    //    appears in the profile (e.g., team size, GPA, percentage).
-    for (const m of bullet.match(/\b\d+(?:\.\d+)?(?:%|k|x)?\b/g) ?? []) {
-      if (!profileText.includes(norm(m))) {
-        notes.push(`Metric ${m} does not appear in your profile`);
+    //    (with its unit) appears in the profile — e.g. team size, GPA, %.
+    for (const m of bullet.match(/(?<![\w.])\d+(?:[.,]\d+)?(?:\s?%|k|x|m)?/gi) ?? []) {
+      if (!profileText.includes(norm(m.trim()))) {
+        notes.push(`Metric ${m.trim()} does not appear in your profile`);
       }
     }
   }
 
-  // 4. Employer names in bullets must match a known organization signature.
-  const knownOrgs = new Set(
-    (profile.experience + " " + profile.projects)
+  // 4. Named entities (employers, projects, schools) claimed in bullets must be
+  //    traceable to the profile. Only multi-word capitalized phrases are
+  //    checked — a sentence-initial "Built" or "Analyzed" is not an entity.
+  const knownEntities = new Set(
+    [
+      profile.experience,
+      profile.projects,
+      profile.university,
+      profile.major,
+      profile.certifications,
+    ]
+      .join(" \n ")
       .split(/[\n·,;]|(?: at )/i)
       .map((chunk) => chunk.trim())
       .flatMap((chunk) => employerSignature(chunk))
       .filter(Boolean),
   );
   for (const bullet of generated.bullets) {
-    for (const proper of bullet.match(/\b[A-Z][a-zA-Z]{2,}(?:\s[A-Z][a-zA-Z]{2,})?\b/g) ?? []) {
-      const sig = employerSignature(proper);
-      if (sig.length > 0 && !sig.every((t) => knownOrgs.has(t))) {
-        notes.push(`Unrecognized employer/project name "${proper}"`);
+    for (const entity of
+      bullet.match(/\b[A-Z][a-zA-Z]{2,}(?:\s+[A-Z][a-zA-Z]{2,})+\b/g) ?? []) {
+      const sig = employerSignature(entity);
+      if (sig.length > 0 && !sig.every((t) => knownEntities.has(t))) {
+        notes.push(`Unrecognized organization or project name "${entity}"`);
       }
     }
   }

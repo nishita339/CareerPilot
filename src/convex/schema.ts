@@ -45,6 +45,10 @@ export default defineSchema({
     minMatchScore: v.number(),
     maxApplicationsPerDay: v.number(),
     blacklistCompanies: v.optional(v.string()),
+    /** Demo mode: include sample listings so the pipeline can be explored
+     *  without configuring any collector API keys. Off by default. */
+    demoMode: v.optional(v.boolean()),
+    lastDigestAt: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
 
@@ -70,7 +74,10 @@ export default defineSchema({
     matchExplanation: v.optional(v.string()),
     resumeHtml: v.optional(v.string()),
     coverLetterHtml: v.optional(v.string()),
+    /** Structured resume (single source for HTML and PDF rendering). */
+    resumeData: v.optional(v.any()),
     resumeVersion: v.optional(v.number()),
+    deadline: v.optional(v.string()),
     validationOk: v.optional(v.boolean()),
     validationNotes: v.optional(v.string()),
     approvedAt: v.optional(v.number()),

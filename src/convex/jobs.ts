@@ -128,6 +128,7 @@ export const addManualJob = mutation({
     opportunityType: v.string(),
     description: v.optional(v.string()),
     applyEmail: v.optional(v.string()),
+    deadline: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -149,6 +150,7 @@ export const addManualJob = mutation({
       opportunityType: args.opportunityType,
       description: args.description?.trim() || undefined,
       applyEmail: args.applyEmail?.trim() || undefined,
+      deadline: args.deadline?.trim() || undefined,
       applyMode,
       status: "New",
       scrapedAt: Date.now(),

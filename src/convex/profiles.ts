@@ -41,6 +41,7 @@ export const saveProfile = mutation({
     minMatchScore: v.number(),
     maxApplicationsPerDay: v.number(),
     blacklistCompanies: v.optional(v.string()),
+    demoMode: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -62,6 +63,7 @@ export const saveProfile = mutation({
         GUARDRAILS.MAX_DAILY_CAP,
         Math.max(1, Math.round(args.maxApplicationsPerDay)),
       ),
+      demoMode: args.demoMode === true,
       updatedAt: Date.now(),
     };
     const existing = await ctx.db

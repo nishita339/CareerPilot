@@ -24,11 +24,15 @@ import { toast } from "sonner";
 import {
   Activity,
   Check,
+  Download,
+  FileDown,
   FileText,
   Inbox,
   Link2,
   Loader2,
+  Lock,
   LogOut,
+  Mail,
   Pencil,
   Plus,
   RefreshCw,
@@ -84,6 +88,10 @@ export default function Dashboard() {
   const activity = useQuery(api.jobs.getActivity, {});
   const collectMut = useAction(api.collect.collect);
   const scoreMut = useMutation(api.jobs.scoreAll);
+  const exportExcel = useAction(api.exportXlsx.exportExcel);
+  const sendDigest = useAction(api.digest.sendDailyDigest);
+  const collectorStatus = useQuery(api.collect.collectorStatus, {});
+  const [privacyOpen, setPrivacyOpen] = useState(false);
 
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("All");
   const [search, setSearch] = useState("");
@@ -151,6 +159,15 @@ export default function Dashboard() {
                 Complete profile
               </Button>
             )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 rounded-none gap-2 text-muted-foreground"
+              onClick={() => setPrivacyOpen(true)}
+            >
+              <Lock className="size-3.5" />
+              <span className="hidden sm:inline">Privacy</span>
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -236,11 +253,19 @@ export default function Dashboard() {
                   const r = await collectMut({});
                   if (r.inserted > 0)
                     toast.success(
-                      `Collected ${r.inserted} new roles (${r.deduped} duplicates skipped)`,
+                      `Collected ${r.inserted} new role${r.inserted === 1 ? "" : "s"} · ${r.deduped} duplicates · ${r.blacklisted} blacklisted`,
+                    );
+                  else if (r.ran.length === 0)
+                    toast.warning(
+                      "No collectors are configured — add API keys in the Keys tab, or enable demo mode in your profile",
                     );
                   else
-                    toast.info("No new roles — everything was already in your pipeline");
+                    toast.info(
+                      `Scanned ${r.fetched} listings from ${r.ran.join(", ")} — nothing new`,
+                    );
                   for (const e of r.errors) toast.warning(e);
+                  for (const s of r.skipped)
+                    console.info(`[collector skipped] ${s.name}: ${s.reason}`);
                 } catch (err) {
                   toast.error(err instanceof Error ? err.message : "Collect failed");
                 } finally {
@@ -284,7 +309,110 @@ export default function Dashboard() {
               <Plus className="size-3.5" />
               Add
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-none"
+              disabled={!profile || busy !== null}
+              onClick={async () => {
+                setBusy("excel");
+                try {
+                  const r = await exportExcel({});
+                  if (r.url) {
+                    const a = document.createElement("a");
+                    a.href = r.url;
+                    a.download = r.filename;
+                    a.target = "_blank";
+                    a.rel = "noreferrer";
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                  }
+                  toast.success(`Exported ${r.rows} rows to ${r.filename}`);
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Export failed");
+                } finally {
+                  setBusy(null);
+                }
+              }}
+            >
+              {busy === "excel" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Download className="size-3.5" />
+              )}
+              Export to Excel
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-none"
+              disabled={busy !== null}
+              onClick={async () => {
+                setBusy("digest");
+                try {
+                  const r = await sendDigest({});
+                  if (r.emailed) toast.success("Digest emailed");
+                  else if (r.telegram) toast.success("Digest sent to Telegram");
+                  else
+                    toast.warning(
+                      "No digest channel configured — set a profile email, or TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID",
+                    );
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Digest failed");
+                } finally {
+                  setBusy(null);
+                }
+              }}
+            >
+              {busy === "digest" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Mail className="size-3.5" />
+              )}
+              Send digest
+            </Button>
           </div>
+        </div>
+
+        {/* Collector status */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border border-border px-4 py-3">
+          <span className="micro-label">Collectors</span>
+          {collectorStatus === undefined ? (
+            <span className="text-xs text-muted-foreground">checking…</span>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {collectorStatus.collectors.map((c) => (
+                <span
+                  key={c.name}
+                  title={
+                    c.configured
+                      ? `${c.name} — active`
+                      : `${c.name} — needs ${c.requiresEnv.join(", ")} in the project environment`
+                  }
+                  className={`inline-flex items-center gap-1.5 border px-2 py-0.5 text-[11px] ${
+                    c.configured
+                      ? "border-foreground/25 text-foreground"
+                      : "border-border text-muted-foreground/70"
+                  }`}
+                >
+                  <span
+                    className={`size-1.5 ${c.configured ? "bg-primary" : "bg-muted-foreground/40"}`}
+                  />
+                  {c.name}
+                </span>
+              ))}
+              {collectorStatus.demoMode && (
+                <span className="inline-flex items-center gap-1.5 border border-primary/40 px-2 py-0.5 text-[11px] text-primary">
+                  <span className="size-1.5 bg-primary" />
+                  demo mode on
+                </span>
+              )}
+            </div>
+          )}
+          <span className="ml-auto hidden text-[11px] text-muted-foreground lg:inline">
+            Public APIs and public boards only · no login walls · no anti-detection tooling
+          </span>
         </div>
 
         {/* Two-pane workspace */}
@@ -387,6 +515,7 @@ export default function Dashboard() {
 
       <ProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />
       <AddJobDialog open={addOpen} onOpenChange={setAddOpen} />
+      <PrivacyDialog open={privacyOpen} onOpenChange={setPrivacyOpen} />
     </div>
   );
 }
@@ -404,6 +533,7 @@ function JobDetail({
   const setStatus = useMutation(api.jobs.setStatus);
   const saveNotes = useMutation(api.jobs.saveNotes);
   const tailor = useAction(api.tailor.tailor);
+  const exportPdf = useAction(api.resumePdf.exportResumePdf);
   const applyEmail = useAction(api.apply.applyEmail);
   const reopen = useMutation(api.apply.reopen);
 
@@ -603,16 +733,45 @@ function JobDetail({
       {/* Tailored documents */}
       {(job.resumeHtml || job.coverLetterHtml) && (
         <div className="border-b border-border">
-          <div className="flex items-center justify-between px-5 py-3">
+          <div className="flex items-center justify-between gap-3 px-5 py-3">
             <span className="micro-label">
               Tailored documents {job.resumeVersion ? `· v${job.resumeVersion}` : ""}
             </span>
-            <button
-              className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
-              onClick={() => setShowResume((v) => !v)}
-            >
-              {showResume ? "Hide" : "Show"}
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                className="inline-flex items-center gap-1.5 text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground disabled:opacity-50"
+                disabled={busy !== null}
+                onClick={async () => {
+                  const r = (await run("pdf", () => exportPdf({ jobId: job._id }))) as
+                    | { url: string | null; filename: string }
+                    | undefined;
+                  if (r?.url) {
+                    const a = document.createElement("a");
+                    a.href = r.url;
+                    a.download = r.filename;
+                    a.target = "_blank";
+                    a.rel = "noreferrer";
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    toast.success(`Generated ${r.filename}`);
+                  }
+                }}
+              >
+                {busy === "pdf" ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <FileDown className="size-3" />
+                )}
+                Download PDF
+              </button>
+              <button
+                className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                onClick={() => setShowResume((v) => !v)}
+              >
+                {showResume ? "Hide" : "Show"}
+              </button>
+            </div>
           </div>
           {showResume && (
             <div className="max-h-[420px] overflow-y-auto px-5 pb-5">
@@ -685,6 +844,7 @@ function ProfileDialog({
 
   const [form, setForm] = useState<Record<string, string>>({});
   const [openRemote, setOpenRemote] = useState(true);
+  const [demoMode, setDemoMode] = useState(false);
   const [minScore, setMinScore] = useState(70);
   const [dailyCap, setDailyCap] = useState(10);
   const [types, setTypes] = useState<string[]>(["job", "internship", "research"]);
@@ -716,6 +876,7 @@ function ProfileDialog({
       blacklistCompanies: profile.blacklistCompanies ?? "",
     });
     setOpenRemote(profile.openToRemote);
+    setDemoMode(profile.demoMode === true);
     setMinScore(profile.minMatchScore);
     setDailyCap(profile.maxApplicationsPerDay);
     setTypes(profile.opportunityTypes.length ? profile.opportunityTypes : ["job", "internship", "research"]);
@@ -750,6 +911,7 @@ function ProfileDialog({
         minMatchScore: minScore,
         maxApplicationsPerDay: dailyCap,
         blacklistCompanies: form.blacklistCompanies || undefined,
+        demoMode,
       });
       toast.success("Profile saved — the pipeline will re-score on next run");
       onOpenChange(false);
@@ -853,6 +1015,16 @@ function ProfileDialog({
           <Field label={`Daily application cap — ${dailyCap} (hard limit 10)`} full>
             <Slider value={[dailyCap]} min={1} max={10} step={1} onValueChange={(v) => setDailyCap(v[0])} />
           </Field>
+          <Field label="Demo mode" full>
+            <div className="flex items-start gap-3">
+              <Switch checked={demoMode} onCheckedChange={setDemoMode} />
+              <span className="text-sm leading-6 text-muted-foreground">
+                Include five labeled sample listings so you can explore the
+                pipeline before adding collector API keys. Demo applies are
+                simulated and never reach a real inbox. Off by default.
+              </span>
+            </div>
+          </Field>
         </div>
 
         <div className="sticky bottom-0 flex items-center justify-between gap-3 border-t border-border bg-background px-6 py-4">
@@ -878,6 +1050,90 @@ function ProfileDialog({
           >
             Delete all my data
           </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ---------------- Privacy dialog ---------------- */
+
+const PRIVACY_ROWS: [string, string][] = [
+  [
+    "Account",
+    "The email address you signed in with, plus the sign-in session. Nothing else is collected about you.",
+  ],
+  [
+    "Master Profile",
+    "Name, headline, contact details, education, skills, experience, projects, certifications, target roles, locations, score floor, daily cap, blacklist and the demo-mode flag. This is the only source the tailoring engine may draw from.",
+  ],
+  [
+    "Listings & scores",
+    "Every role the collectors returned: source, organization, title, location, public URL, the listing description text, extracted skills, match score, matched/missing skills and the explanation.",
+  ],
+  [
+    "Documents",
+    "The tailored resume (structured data + HTML) and cover letter for roles you chose to tailor, plus the validator notes for each one.",
+  ],
+  [
+    "Audit trail",
+    "One row per action — scoring, tailoring, approvals, sends, exports, digests — with a timestamp. This is what enforces the daily cap.",
+  ],
+  [
+    "Never stored",
+    "No platform logins, no cookies from job boards, no payment data, no browsing history, no fingerprinting. No scraping of sites behind a login wall, and no anti-detection tooling exists in this app.",
+  ],
+  [
+    "Where it lives",
+    "In your Convex deployment's database and file storage, tied to your account. Exports (xlsx / pdf) are stored as temporary files in that same deployment's storage.",
+  ],
+  [
+    "Third parties that see data",
+    "The LLM gateway (your profile + the job description you tailor for), the email gateway (your digest and approved applications only), and the public job APIs you query with your target role titles. Collector API keys live in the deployment environment, never in the database or the browser.",
+  ],
+  [
+    "How to delete it",
+    "Profile dialog → 'Delete all my data' removes the profile, every listing, every tailored document and the whole audit trail. Deleting your sign-in removes the account row. There is no soft-delete or backup copy kept by the app.",
+  ],
+];
+
+function PrivacyDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto rounded-none p-0">
+        <DialogHeader className="border-b border-border px-6 py-4">
+          <p className="micro-label">Privacy</p>
+          <DialogTitle className="text-base font-semibold tracking-tight">
+            Exactly what is stored, and how to remove it
+          </DialogTitle>
+          <DialogDescription className="text-sm leading-6">
+            No hidden telemetry. This is the complete list of data this app
+            keeps about you.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="border-b border-border">
+          {PRIVACY_ROWS.map(([k, v], i) => (
+            <div
+              key={k}
+              className={`grid gap-1 px-6 py-4 sm:grid-cols-[170px_1fr] sm:gap-6 ${i > 0 ? "border-t border-border" : ""}`}
+            >
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {k}
+              </div>
+              <div className="text-sm leading-6">{v}</div>
+            </div>
+          ))}
+        </div>
+        <div className="px-6 py-4 text-xs leading-5 text-muted-foreground">
+          Deletion is immediate and complete — open Profile → “Delete all my
+          data”. Reviewer note: scheduled daily runs only ever read your own
+          account and email your own address.
         </div>
       </DialogContent>
     </Dialog>
@@ -911,7 +1167,15 @@ function AddJobDialog({
   onOpenChange: (v: boolean) => void;
 }) {
   const add = useMutation(api.jobs.addManualJob);
-  const [form, setForm] = useState({ title: "", organization: "", url: "", location: "", description: "", applyEmail: "" });
+  const [form, setForm] = useState({
+    title: "",
+    organization: "",
+    url: "",
+    location: "",
+    description: "",
+    applyEmail: "",
+    deadline: "",
+  });
   const [type, setType] = useState("job");
   const [saving, setSaving] = useState(false);
 
@@ -952,6 +1216,9 @@ function AddJobDialog({
           <Field label="Apply email (optional — enables email apply)">
             <Input className="rounded-none" type="email" value={form.applyEmail} onChange={set("applyEmail")} />
           </Field>
+          <Field label="Deadline (optional)">
+            <Input className="rounded-none" placeholder="2026-10-15 or Rolling" value={form.deadline} onChange={set("deadline")} />
+          </Field>
           <Field label="Description (optional)">
             <Textarea className="min-h-24 rounded-none" value={form.description} onChange={set("description")} />
           </Field>
@@ -963,9 +1230,25 @@ function AddJobDialog({
             onClick={async () => {
               setSaving(true);
               try {
-                await add({ ...form, url: form.url || undefined, location: form.location || undefined, applyEmail: form.applyEmail || undefined, description: form.description || undefined, opportunityType: type });
+                await add({
+                  ...form,
+                  url: form.url || undefined,
+                  location: form.location || undefined,
+                  applyEmail: form.applyEmail || undefined,
+                  deadline: form.deadline || undefined,
+                  description: form.description || undefined,
+                  opportunityType: type,
+                });
                 toast.success("Added to pipeline");
-                setForm({ title: "", organization: "", url: "", location: "", description: "", applyEmail: "" });
+                setForm({
+                  title: "",
+                  organization: "",
+                  url: "",
+                  location: "",
+                  description: "",
+                  applyEmail: "",
+                  deadline: "",
+                });
                 onOpenChange(false);
               } catch (err) {
                 toast.error(err instanceof Error ? err.message : "Add failed");

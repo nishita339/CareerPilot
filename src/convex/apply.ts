@@ -3,6 +3,7 @@ import { action, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { vly } from "../lib/vly-integrations";
+import { asResumeDoc, renderResumeText } from "./resume";
 
 const DEMO_EMAIL_DOMAINS =
   /@(demo-lab|acme-demo|nordic-demo|ferrous-demo|cobalt-demo)\.example$/i;
@@ -68,19 +69,17 @@ function buildPlainText(
     title: string;
     organization: string;
     resumeHtml?: string;
-    coverLetterHtml?: string;
+    resumeData?: unknown;
   },
 ): string {
+  const doc = asResumeDoc(job.resumeData);
+  const resume = doc ? renderResumeText(doc) : stripHtml(job.resumeHtml ?? "");
   return [
     "Hello,",
     "",
     `I am applying for the ${job.title} role at ${job.organization}.`,
     "",
-    "My tailored resume:",
-    "",
-    stripHtml(job.resumeHtml ?? ""),
-    "",
-    stripHtml(job.coverLetterHtml ?? ""),
+    resume,
     "",
     `— ${profile.fullName} · ${profile.email} · ${profile.phone}`,
   ].join("\n");

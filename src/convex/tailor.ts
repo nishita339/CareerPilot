@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { vly } from "../lib/vly-integrations";
 import { validateClaims } from "./validator";
+import { buildResumeDoc, renderResumeHtml } from "./resume";
 
 /** Model name comes from config, never hardcoded per the prompt rules. */
 const TAILOR_MODEL = process.env.CAREERPILOT_LLM_MODEL ?? "gpt-4o-mini";
@@ -167,32 +168,34 @@ export const tailor = action({
       parsed,
     );
 
-    const resumeHtml = [
-      `<h3>${escapeHtml(profile.fullName)}</h3>`,
-      `<p class="muted">${escapeHtml(profile.headline)} · ${escapeHtml(profile.email)} · ${escapeHtml(profile.phone)} · ${escapeHtml(profile.location)}</p>`,
-      `<p><strong>Education</strong><br/>${escapeHtml(profile.major)}, ${escapeHtml(profile.university)} (${escapeHtml(profile.graduationYear)})${profile.gpa ? ` · GPA ${escapeHtml(profile.gpa)}` : ""}</p>`,
-      profile.relevantCoursework
-        ? `<p><strong>Coursework</strong><br/>${escapeHtml(profile.relevantCoursework)}</p>`
-        : "",
-      `<p><strong>Skills</strong><br/>${parsed.skills.map((s: string) => escapeHtml(s)).join(" · ")}</p>`,
-      parsed.bullets.length
-        ? `<p><strong>Selected experience &amp; projects</strong></p><ul>${parsed.bullets.map((b: string) => `<li>${escapeHtml(b)}</li>`).join("")}</ul>`
-        : "",
-      profile.certifications
-        ? `<p><strong>Certifications</strong><br/>${escapeHtml(profile.certifications)}</p>`
-        : "",
-      `<p class="muted">Summary</p><p>${escapeHtml(parsed.summary)}</p>`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    // One structured document feeds both the ATS-friendly HTML and the PDF export.
+    const resumeDoc = buildResumeDoc(
+      {
+        fullName: profile.fullName,
+        headline: profile.headline,
+        email: profile.email,
+        phone: profile.phone,
+        location: profile.location,
+        links: profile.links,
+        major: profile.major,
+        university: profile.university,
+        graduationYear: profile.graduationYear,
+        gpa: profile.gpa,
+        relevantCoursework: profile.relevantCoursework,
+        certifications: profile.certifications,
+      },
+      parsed,
+    );
+    const resumeHtml = renderResumeHtml(resumeDoc);
 
     const coverLetterHtml = parsed.coverLetter
-      ? `<p>Dear Hiring Team,</p><p>${escapeHtml(parsed.coverLetter)}</p><p>Sincerely,<br/>${escapeHtml(profile.fullName)}</p>`
+      ? `<p>Dear Hiring Team,</p><p>${parsed.coverLetter}</p><p>Sincerely,<br/>${profile.fullName}</p>`
       : `<p class="muted">No cover letter generated.</p>`;
 
     await ctx.runMutation(internal.private.saveTailored, {
       jobId,
       resumeHtml,
+      resumeData: resumeDoc,
       coverLetterHtml,
       resumeVersion: (job.resumeVersion ?? 0) + 1,
       validationOk: validation.ok,
@@ -206,14 +209,6 @@ export const tailor = action({
     };
   },
 });
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 /** Review artifact: the full job record including tailored documents. */
 export const getJobForReview = query({
