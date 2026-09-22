@@ -12,6 +12,7 @@ ones for you inside hard limits you set.
 | Rule | Where it is enforced |
 | --- | --- |
 | Documented public APIs, public job boards and one public web-search index — no login-wall scraping | `src/convex/collectors.ts`, `src/convex/websearch.ts` |
+| Scholarships, government exams and study abroad are restricted to an **official-portal allow-list** — no affiliate "scholarship blog" can enter the pipeline | `OFFICIAL_PORTAL_DOMAINS` in `src/convex/websearch.ts` |
 | No anti-detection tooling: no fingerprint spoofing, no patched browsers, no proxy rotation, no CAPTCHA solving | nothing of the sort exists in the codebase; a blocked source is skipped |
 | Resumes never invent skills, employers or metrics | `src/convex/validator.ts` + `tailor.ts` prompt rules |
 | A resume and the core profile fields are **mandatory** before the pipeline opens | `src/convex/suggestions.ts` (`REQUIRED_FIELDS`) + the `/onboarding` gate in `Dashboard.tsx` |
@@ -58,12 +59,16 @@ the dashboard tabs, the collector strip and the Excel sheets:
 | Jobs | `job` | RemoteOK, Remotive, Greenhouse, Lever, Adzuna, Jooble |
 | Internships | `internship` | job boards + public boards |
 | Research | `research`, `fellowship` | arXiv, Semantic Scholar, web search |
-| Scholarships | `scholarship` | web search index |
-| Government exams | `govt-exam` | web search index |
+| Scholarships | `scholarship` | official scholarship portals only |
+| Government exams | `govt-exam` | official exam bodies only |
+| Study abroad | `study-abroad` | DAAD, Erasmus+, Fulbright, EducationUSA, Campus France and similar official agencies |
 
 Classification is deterministic (`classifyOpportunity`): research markers win
 first, a government **and** an exam marker are both required for the exam
-section, and a plain corporate "recruitment" ad never lands there.
+section, a plain corporate "recruitment" ad never lands there, and study-abroad
+markers are checked last — so a funded programme that says "scholarship" stays in
+Scholarships, and a "research fellow" stays in Research, instead of both drifting
+into Study abroad.
 
 ## Collectors
 
@@ -77,9 +82,10 @@ section, and a plain corporate "recruitment" ad never lands there.
 | Jooble | `JOOBLE_API_KEY` | documented REST endpoint |
 | arXiv | none | public Atom API; surfaced as research opportunities (manual apply) |
 | Semantic Scholar | optional `SEMANTIC_SCHOLAR_API_KEY` | public Graph API; research opportunities |
-| Web · Jobs / Internships / Research / Scholarships / Government exams | `EXA_API_KEY` | the open-web channel — see below |
+| Web · Jobs / Internships / Research | `EXA_API_KEY` | the open-web channel — see below |
+| Web · Scholarships / Government exams / Study abroad | `EXA_API_KEY` | same channel, but restricted to **official portals** — see below |
 | Web · Blogs & community | `EXA_API_KEY`, `EXA_COMMUNITY_DOMAINS` | opt-in; needs a domain allow-list to be useful |
-| Demo board | none | **demo mode only** — eight labeled sample listings covering every section |
+| Demo board | none | **demo mode only** — nine labeled sample listings covering every section |
 
 Missing keys are reported as `skipped` (with the exact variable name) instead of
 failing the run, one broken collector never blocks the others, and each web
@@ -97,6 +103,33 @@ any labelled deadline or apply address found in the text. There is no login, no
 cookie jar, no browser automation, no fingerprint spoofing and no proxy rotation:
 if a page is not publicly indexable it simply does not appear, and the row always
 links back to the original page.
+
+### Official-portal allow-lists
+
+The three categories with no job-board API are exactly the ones where an
+unrestricted web search drowns you in affiliate "scholarship blog" and "Sarkari
+Result" sites that republish stale notices. So those channels are restricted to a
+curated list of **official** portals — the awarding body, the ministry, or the
+government education agency itself (`OFFICIAL_PORTAL_DOMAINS` in
+`websearch.ts`). A result from any other host is never fetched, never stored and
+never scored, and `tests/websearch.test.ts` asserts that no aggregator domain is
+on any allow-list.
+
+Any of these can be **replaced** — useful outside India, or if you only care
+about one country:
+
+| Variable | Channel | Built-in examples |
+| --- | --- | --- |
+| `EXA_SCHOLARSHIP_DOMAINS` | Scholarships | scholarships.gov.in, education.gov.in, ugc.gov.in, chevening.org, cscuk.fcdo.gov.uk, daad.de, erasmus-plus.ec.europa.eu, fulbright.org |
+| `EXA_EXAM_DOMAINS` | Government exams | upsc.gov.in, ssc.gov.in, ibps.in, indianrailways.gov.in, nta.ac.in, employmentnews.gov.in, rbi.org.in, sbi.co.in |
+| `EXA_STUDY_ABROAD_DOMAINS` | Study abroad | daad.de, study-in-germany.de, erasmus-plus.ec.europa.eu, fulbright.org, educationusa.state.gov, campusfrance.org, studyinaustralia.gov.au, educanada.ca |
+
+Setting one **replaces** its built-in list (comma-separated). Paste bare hosts
+(`daad.de`) or full URLs (`https://www.daad.de/en/study`) — both are normalised to
+the bare host, and duplicates collapse. Leave it unset to keep the defaults. **Study abroad is never
+auto-applied** — these are programmes you apply to on the institution's own
+portal, so the section is display-and-remind only, with an "apply here yourself"
+link.
 
 ## Setup is mandatory
 
@@ -168,14 +201,15 @@ are invisible by design.
 
 `Export to Excel` builds `Student_Applications_Master.xlsx` in Convex storage
 with one sheet per section — **All, Jobs, Internships, Research, Scholarships,
-Govt Exams, Shortlisted, Applied, Dashboard Summary** — and the columns
+Govt Exams, Study Abroad, Shortlisted, Applied, Dashboard Summary** — and the columns
 `Job_ID, Platform_Source, Type, Organization, Title, Location, Link, Match_Score,
 Matched_Skills, Missing_Skills, Deadline, Status, Date_Scraped, Date_Applied,
 Auto_Applied, Notes`.
 
 Matched/missing skills are split into two columns so the sheet stays pivotable;
 `Auto_Applied` marks what autopilot sent. The Dashboard Summary sheet carries
-counts by status and by type (including scholarships and exams), average score,
+counts by status and by type (including scholarships, exams and study abroad),
+average score,
 applied-today and how much of it was autopilot, remaining quota, active sources
 and the enforced policy text. The export is a one-way snapshot: edit `Status` and
 `Notes` inside the app, not in the file.
@@ -216,7 +250,7 @@ seven days. Email needs a profile email; Telegram needs `TELEGRAM_BOT_TOKEN` and
 ## Tests
 
 ```bash
-bun test                                        # 181 tests
+bun test                                        # 199 tests
 bunx convex dev --once && bunx tsc -b --noEmit   # backend codegen + typecheck
 ```
 
@@ -224,7 +258,7 @@ What the suites actually prove, rather than assert:
 
 - **Validator** — invented skills, employers, metrics and AI-slop phrasing are
   blocked, so a flagged resume can never be sent.
-- **Exports** — a real `.xlsx` is built and loaded back (all nine sheets, column
+- **Exports** — a real `.xlsx` is built and loaded back (all ten sheets, column
   order, row mapping, summary maths, `Auto_Applied`), and a real `.pdf` is built
   and its text *extracted back out* (inflating content streams, decoding WinAnsi)
   to prove linear order and no garbled characters. The PDF tests also include a
@@ -242,6 +276,14 @@ What the suites actually prove, rather than assert:
   `EXA_API_KEY` is missing, query construction, result mapping (deadline and
   apply-address extraction), and that community/blog search needs an explicit
   domain list.
+- **Official allow-lists** — that scholarships, exams and study abroad always
+  carry a non-empty allow-list, that job boards stay unrestricted, that no
+  affiliate aggregator appears on any list, that every entry is a bare host, that
+  an env var replaces a built-in list without touching the others, and that the
+  community channel has no built-in list at all.
+- **Never auto-applied** — study abroad, scholarships and exams are dropped from
+  the autopilot type list even if a profile asks for them, and are ignored by the
+  candidate selector.
 - **Suggestions** — completeness rules and each advice rule, including that skill
   gaps are framed as "only if you genuinely have it".
 - **Collector status** — never leaks a credential value, only the variable name.
@@ -283,7 +325,9 @@ Everything lives in **your** Convex deployment, tied to your account.
   role's apply address.
 - The public job APIs receive only your target role keywords. The web-search
   index receives the generated query (derived from your major, target roles,
-  location and selected sections) — nothing else about you.
+  location and selected sections) — nothing else about you — and for the
+  scholarship, exam and study-abroad channels the request is additionally
+  restricted to the official-portal allow-list.
 
 Collector API keys live in the deployment environment; they are never written to
 the database and never sent to the browser.

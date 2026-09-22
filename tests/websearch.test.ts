@@ -3,13 +3,21 @@ import {
   buildChannelPlan,
   buildExaRequestBody,
   channelKeysFor,
+  domainsFor,
   extractDeadlineFromText,
   mapResultToRawJob,
+  OFFICIAL_PORTAL_DOMAINS,
   SEARCH_CHANNELS,
   type SearchProfile,
 } from "../src/convex/websearch";
 
-const MANAGED = ["EXA_API_KEY", "EXA_COMMUNITY_DOMAINS"];
+const MANAGED = [
+  "EXA_API_KEY",
+  "EXA_COMMUNITY_DOMAINS",
+  "EXA_SCHOLARSHIP_DOMAINS",
+  "EXA_EXAM_DOMAINS",
+  "EXA_STUDY_ABROAD_DOMAINS",
+];
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -53,6 +61,12 @@ describe("channelKeysFor", () => {
     ).toEqual(["internships"]);
   });
 
+  test("study abroad is its own channel", () => {
+    expect(channelKeysFor({ ...profile, opportunityTypes: ["study-abroad"] })).toEqual([
+      "study-abroad",
+    ]);
+  });
+
   test("never throws without a profile", () => {
     expect(channelKeysFor(undefined)).toEqual([]);
   });
@@ -86,6 +100,114 @@ describe("buildChannelPlan", () => {
       expect(channel.label.length).toBeGreaterThan(0);
       expect(channel.buildQuery(profile, 2026).length).toBeGreaterThan(10);
     }
+  });
+});
+
+describe("official-portal allow-lists", () => {
+  test("the scholarship, exam and study-abroad channels are all domain restricted", () => {
+    const plan = buildChannelPlan(
+      { ...profile, opportunityTypes: ["scholarship", "govt-exam", "study-abroad"] },
+      AT,
+    );
+    const domains = new Map(plan.map((p) => [p.channel.key, p.includeDomains]));
+    expect(domains.get("scholarships")).toContain("scholarships.gov.in");
+    expect(domains.get("scholarships")).toContain("daad.de");
+    expect(domains.get("govt-exams")).toContain("upsc.gov.in");
+    expect(domains.get("govt-exams")).toContain("ssc.gov.in");
+    expect(domains.get("study-abroad")).toContain("daad.de");
+    expect(domains.get("study-abroad")).toContain("erasmus-plus.ec.europa.eu");
+    expect(domains.get("study-abroad")).toContain("fulbright.org");
+  });
+
+  test("every channel in the plan carries a non-empty allow-list or none at all", () => {
+    for (const entry of buildChannelPlan(profile, AT)) {
+      const list = entry.includeDomains;
+      if (list) expect(list.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("job boards are not domain restricted", () => {
+    expect(domainsFor("jobs")).toBeUndefined();
+    expect(domainsFor("internships")).toBeUndefined();
+    expect(domainsFor("research")).toBeUndefined();
+  });
+
+  test("no affiliate aggregator is ever on an official allow-list", () => {
+    const all = Object.values(OFFICIAL_PORTAL_DOMAINS).flat();
+    for (const junk of [
+      "buddy4study.com",
+      "scholarshiproar.com",
+      "sarkariresult.com",
+      "medium.com",
+      "linkedin.com",
+      "naukri.com",
+    ]) {
+      expect(all).not.toContain(junk);
+    }
+  });
+
+  test("venue is official: every entry is a bare host, never a URL or a path", () => {
+    for (const list of Object.values(OFFICIAL_PORTAL_DOMAINS)) {
+      for (const host of list) {
+        expect(host).not.toContain("/");
+        expect(host).not.toContain(" ");
+        expect(host.startsWith("http")).toBe(false);
+      }
+    }
+  });
+
+  test("an env var replaces the built-in list for another country", () => {
+    expect(domainsFor("study-abroad")).toContain("campusfrance.org");
+    process.env.EXA_STUDY_ABROAD_DOMAINS = "uni-assist.de, daad.de";
+    expect(domainsFor("study-abroad")).toEqual(["uni-assist.de", "daad.de"]);
+    // …and the other channels keep their defaults.
+    expect(domainsFor("scholarships")).toContain("chevening.org");
+  });
+
+  test("exam domains are the official bodies and can be narrowed", () => {
+    expect(domainsFor("govt-exams")).toContain("ibps.in");
+    expect(domainsFor("govt-exams")).toContain("indianrailways.gov.in");
+    process.env.EXA_EXAM_DOMAINS = "ssc.gov.in";
+    expect(domainsFor("govt-exams")).toEqual(["ssc.gov.in"]);
+  });
+
+  test("pasted URLs and paths are normalised to bare hosts", () => {
+    process.env.EXA_SCHOLARSHIP_DOMAINS =
+      "https://www.scholarships.gov.in/list, DAAD.de , ugc.gov.in/,";
+    expect(domainsFor("scholarships")).toEqual([
+      "scholarships.gov.in",
+      "daad.de",
+      "ugc.gov.in",
+    ]);
+  });
+
+  test("duplicate hosts collapse, and a blank list falls back to the defaults", () => {
+    process.env.EXA_EXAM_DOMAINS = "upsc.gov.in, https://upsc.gov.in/notices, upsc.gov.in";
+    expect(domainsFor("govt-exams")).toEqual(["upsc.gov.in"]);
+    process.env.EXA_EXAM_DOMAINS = "   ,  ";
+    expect(domainsFor("govt-exams")).toContain("ssc.gov.in");
+  });
+
+  test("the community channel has no built-in list — it stays opt-in", () => {
+    expect(domainsFor("community")).toBeUndefined();
+    process.env.EXA_COMMUNITY_DOMAINS = "dev.to";
+    expect(domainsFor("community")).toEqual(["dev.to"]);
+  });
+
+  test("the study-abroad channel maps results into its own section", () => {
+    const channel = SEARCH_CHANNELS.find((c) => c.key === "study-abroad")!;
+    const job = mapResultToRawJob(
+      {
+        title: "Universities with rolling admissions",
+        url: "https://www.daad.de/en/study-and-research-in-germany/",
+        text: "Overview of application windows.",
+      },
+      { channel },
+      AT,
+    );
+    expect(job!.opportunityType).toBe("study-abroad");
+    expect(job!.source).toBe("Web · Study abroad");
+    expect(job!.organization).toBe("DAAD (Germany)");
   });
 });
 

@@ -32,6 +32,7 @@ const TYPE_OPTIONS: [string, string, string][] = [
   ["fellowship", "Fellowships", "Stipended fellowship programmes"],
   ["scholarship", "Scholarships", "Merit and need-based awards"],
   ["govt-exam", "Government exams", "Public-sector exam notifications"],
+  ["study-abroad", "Study abroad", "Foreign master's programmes and exchange"],
 ];
 
 /** Fields each step must satisfy before you can move on. */

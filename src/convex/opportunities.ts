@@ -8,7 +8,8 @@ export type OpportunityType =
   | "research"
   | "fellowship"
   | "scholarship"
-  | "govt-exam";
+  | "govt-exam"
+  | "study-abroad";
 
 export interface RawJob {
   title: string;
@@ -74,6 +75,39 @@ const INTERNSHIP_RE = /\b(intern|internship|placement|working student|trainee)\b
 const FELLOWSHIP_RE = /\b(fellow|fellowship|scholar program)\b/;
 
 /**
+ * Places that make "study in X" or "master's in X" an abroad signal rather than
+ * a domestic course page.
+ */
+const ABROAD_PLACES =
+  "germany|europe|the eu|eu|usa|united states|canada|australia|the uk|united kingdom|ireland|france|netherlands|sweden|norway|denmark|finland|italy|spain|japan|south korea|singapore|new zealand|switzerland|austria|poland|czech republic";
+
+/**
+ * Study-abroad markers. Deliberately narrow, and evaluated last: a funded
+ * programme that says "scholarship" stays a scholarship, a "research fellow"
+ * stays research, and only pages that are genuinely about studying in another
+ * country land in this section. Anything else on that channel falls back to the
+ * channel hint.
+ */
+const STUDY_ABROAD_RE = new RegExp(
+  `\\b(?:${[
+    "study abroad",
+    "studying abroad",
+    "study overseas",
+    "semester abroad",
+    "year abroad",
+    "exchange program(?:me)?",
+    "student exchange",
+    "international exchange",
+    "overseas education",
+    "foreign universit",
+    "admission abroad",
+    `study in (?:${ABROAD_PLACES})`,
+    `masters?(?:'s)? (?:degree )?(?:in|program(?:me)? in) (?:${ABROAD_PLACES})`,
+  ].join("|")})\\b`,
+  "i",
+);
+
+/**
  * Heuristic classification from title + description text.
  * Order matters: "research intern" is a research role, a government exam
  * notification is not a job posting, and a scholarship is its own category.
@@ -91,6 +125,7 @@ export function classifyOpportunity(
   if (SCHOLARSHIP_RE.test(text)) return "scholarship";
   if (INTERNSHIP_RE.test(text)) return "internship";
   if (FELLOWSHIP_RE.test(text)) return "fellowship";
+  if (STUDY_ABROAD_RE.test(text)) return "study-abroad";
   return sourceHint ?? "job";
 }
 
@@ -102,6 +137,7 @@ export const OPPORTUNITY_TYPE_LABELS: Record<string, string> = {
   fellowship: "Fellowship",
   scholarship: "Scholarship",
   "govt-exam": "Government exam",
+  "study-abroad": "Study abroad",
 };
 
 /** The three sections that describe *employment*, used for section counts. */
@@ -147,11 +183,33 @@ export function organizationFromUrl(url: string): string {
       "naukri.com": "Naukri (public listing)",
       "greenhouse.io": "Greenhouse board",
       "lever.co": "Lever board",
-      "scholarships.gov.in": "National Scholarship Portal",
-      "buddy4study.com": "Buddy4Study",
       "upwork.com": "Upwork",
       "github.com": "GitHub",
       "medium.com": "Medium",
+      // Official portals — the awarding body, ministry or government agency
+      // itself, so the Organization column never reads like an affiliate blog.
+      "scholarships.gov.in": "National Scholarship Portal",
+      "education.gov.in": "Ministry of Education (India)",
+      "ugc.gov.in": "UGC",
+      "aicte-india.org": "AICTE",
+      "chevening.org": "Chevening (UK)",
+      "cscuk.fcdo.gov.uk": "Commonwealth Scholarships (UK)",
+      "daad.de": "DAAD (Germany)",
+      "study-in-germany.de": "Study in Germany (DAAD)",
+      "erasmus-plus.ec.europa.eu": "Erasmus+ (EU)",
+      "fulbright.org": "Fulbright (US)",
+      "educationusa.state.gov": "EducationUSA (US State Dept)",
+      "campusfrance.org": "Campus France",
+      "studyinaustralia.gov.au": "Study Australia (Govt)",
+      "educanada.ca": "EduCanada",
+      "upsc.gov.in": "UPSC",
+      "ssc.gov.in": "SSC",
+      "ibps.in": "IBPS",
+      "indianrailways.gov.in": "Indian Railways (RRB)",
+      "nta.ac.in": "National Testing Agency",
+      "employmentnews.gov.in": "Employment News (Govt of India)",
+      "rbi.org.in": "Reserve Bank of India",
+      "sbi.co.in": "State Bank of India",
     };
     for (const [domain, label] of Object.entries(known)) {
       if (host === domain || host.endsWith(`.${domain}`)) return label;

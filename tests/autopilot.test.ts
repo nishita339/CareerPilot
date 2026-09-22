@@ -63,6 +63,12 @@ describe("autopilot settings clamps", () => {
       "job",
       "internship",
     ]);
+    // Study abroad is a programme to apply to on the institution's own portal —
+    // never an email this app sends on the student's behalf.
+    expect(normalizeAutoApplyTypes(["study-abroad"])).toEqual(["job", "internship"]);
+    expect(
+      normalizeAutoApplyTypes(["study-abroad", "scholarship", "research"]),
+    ).toEqual(["research"]);
     expect(normalizeAutoApplyTypes(["research"])).toEqual(["research"]);
     expect(normalizeAutoApplyTypes(undefined)).toEqual(["job", "internship"]);
   });
@@ -124,6 +130,8 @@ describe("selectAutopilotCandidates", () => {
         job({ jobId: "low", matchScore: 84 }),
         job({ jobId: "form", applyMode: "form", applyEmail: undefined }),
         job({ jobId: "exam", opportunityType: "govt-exam", matchScore: 99 }),
+        job({ jobId: "scholar", opportunityType: "scholarship", matchScore: 99 }),
+        job({ jobId: "abroad", opportunityType: "study-abroad", matchScore: 99 }),
         job({ jobId: "no-email", applyEmail: undefined }),
         job({ jobId: "already", status: "Resume Ready" }),
         job({ jobId: "goods", matchScore: 88 }),

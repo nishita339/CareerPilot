@@ -20,6 +20,7 @@ import {
   SEARCH_CHANNELS,
   channelKeysFor,
   collectChannel,
+  domainsFor,
   exaConfigured,
   type SearchProfile,
 } from "./websearch";
@@ -567,6 +568,23 @@ export function collectDemoBoard(): RawJob[] {
       applyEmail: "fellowship@commons-demo.example",
       opportunityType: "fellowship",
     },
+    {
+      source: "DEMO-StudyAbroad",
+      externalId: "sa-1",
+      title: "Master's Programme in Data Science — Study in Germany",
+      organization: "Nordic Technical University (demo)",
+      location: "Munich, Germany",
+      remoteOk: false,
+      url: "https://example.com/study-abroad/msc-data-science",
+      description:
+        "Two-year English-taught master's programme for international students. Admission " +
+        "requirements: bachelor's degree in a quantitative field, transcripts, statement of " +
+        "purpose, two references. Application portal closes 2027-03-15. Tuition-free; check " +
+        "the official page for the blocked-account and visa requirements. Apply on the " +
+        "university's own portal — this app never fills or submits it for you.",
+      deadline: "2027-03-15",
+      opportunityType: "study-abroad",
+    },
   ];
 }
 
@@ -651,8 +669,12 @@ const BOARD_COLLECTORS: CollectorSpec[] = [
 
 /**
  * One registry entry per open-web channel, so the dashboard strip shows which
- * sections (scholarships, government exams, blogs) actually produced data and
- * which one is waiting on EXA_API_KEY.
+ * sections (scholarships, government exams, study abroad, blogs) actually
+ * produced data and which one is waiting on EXA_API_KEY.
+ *
+ * The scholarship, exam and study-abroad channels run only against the official
+ * portal allow-list in websearch.ts, so an unrestricted "scholarship blog"
+ * never reaches the pipeline.
  */
 const WEB_COLLECTORS: CollectorSpec[] = SEARCH_CHANNELS.map((channel) => ({
   name: `Web · ${channel.label}`,
@@ -662,7 +684,7 @@ const WEB_COLLECTORS: CollectorSpec[] = SEARCH_CHANNELS.map((channel) => ({
   enabledFor: (profile) =>
     channel.key === "community"
       ? // Blogs and forums are opt-in: they only add value with a domain list.
-        envList("EXA_COMMUNITY_DOMAINS").length > 0
+        domainsFor("community") !== undefined
       : channelKeysFor(profile).includes(channel.key),
   run: (ctx) => collectChannel(channel.key, ctx.profile),
 }));

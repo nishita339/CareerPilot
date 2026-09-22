@@ -97,6 +97,66 @@ describe("extractApplyEmail", () => {
   });
 });
 
+describe("classifyOpportunity — study abroad", () => {
+  test("detects programmes about studying in another country", () => {
+    expect(
+      classifyOpportunity("Study in Germany — Master's Programme in Data Science"),
+    ).toBe("study-abroad");
+    expect(classifyOpportunity("Semester Abroad Exchange Programme 2027")).toBe(
+      "study-abroad",
+    );
+    expect(
+      classifyOpportunity(
+        "Admission requirements for international students",
+        "what you need before you study abroad",
+      ),
+    ).toBe("study-abroad");
+    expect(classifyOpportunity("Master's in Canada", "two-year programme")).toBe(
+      "study-abroad",
+    );
+  });
+
+  test("a funded programme stays a scholarship", () => {
+    expect(
+      classifyOpportunity("DAAD Scholarship for Master's Studies in Germany"),
+    ).toBe("scholarship");
+    expect(classifyOpportunity("Erasmus+ Scholarship", "study in europe")).toBe(
+      "scholarship",
+    );
+  });
+
+  test("research and fellowships keep winning", () => {
+    expect(classifyOpportunity("PhD position — study abroad programme")).toBe(
+      "research",
+    );
+    // "research fellow" has no research marker from the taxonomy's point of
+    // view — fellowship wording wins, which keeps it in the Research section
+    // anyway (that section covers research + fellowship).
+    expect(
+      classifyOpportunity("Visiting Research Fellow", "semester abroad exchange"),
+    ).toBe("fellowship");
+    expect(classifyOpportunity("Fulbright Fellowship", "study in the united states")).toBe(
+      "fellowship",
+    );
+  });
+
+  test("a domestic course page is not study abroad", () => {
+    expect(
+      classifyOpportunity(
+        "Master's Programme in Computer Science",
+        "admissions open for the 2027 batch",
+      ),
+    ).toBe("job");
+    expect(classifyOpportunity("Study material for semester exams")).toBe("job");
+  });
+
+  test("falls back to the study-abroad channel hint", () => {
+    expect(
+      classifyOpportunity("Universities with rolling admissions", "", "study-abroad"),
+    ).toBe("study-abroad");
+  });
+});
+
 describe("organizationFromUrl", () => {
   test("maps well-known hosts to readable labels", () => {
     expect(organizationFromUrl("https://www.linkedin.com/jobs/view/123")).toBe(
@@ -107,6 +167,20 @@ describe("organizationFromUrl", () => {
     );
     expect(organizationFromUrl("https://scholarships.gov.in/list")).toBe(
       "National Scholarship Portal",
+    );
+  });
+
+  test("labels the official portals behind the new sections", () => {
+    expect(organizationFromUrl("https://www.daad.de/en/study-in-germany/")).toBe(
+      "DAAD (Germany)",
+    );
+    expect(organizationFromUrl("https://erasmus-plus.ec.europa.eu/opportunities")).toBe(
+      "Erasmus+ (EU)",
+    );
+    expect(organizationFromUrl("https://upsc.gov.in/examinations")).toBe("UPSC");
+    expect(organizationFromUrl("https://www.ssc.gov.in/portal")).toBe("SSC");
+    expect(organizationFromUrl("https://study-in-germany.de/programmes")).toBe(
+      "Study in Germany (DAAD)",
     );
   });
 

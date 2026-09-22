@@ -36,6 +36,7 @@ export type SearchChannelKey =
   | "research"
   | "scholarships"
   | "govt-exams"
+  | "study-abroad"
   | "community";
 
 export interface SearchChannel {
@@ -99,6 +100,13 @@ export const SEARCH_CHANNELS: SearchChannel[] = [
       `${country(p)} government exam notification for graduates ${p.major} ${year} apply online`.replace(/\s+/g, " ").trim(),
   },
   {
+    key: "study-abroad",
+    label: "Study abroad",
+    hint: "study-abroad",
+    buildQuery: (p, year) =>
+      `${p.major} study abroad master program admission requirements ${year} international students`.replace(/\s+/g, " ").trim(),
+  },
+  {
     key: "community",
     label: "Blogs & community",
     hint: "job",
@@ -118,7 +126,102 @@ export function channelKeysFor(
   if (wanted.has("research") || wanted.has("fellowship")) keys.push("research");
   if (wanted.has("scholarship")) keys.push("scholarships");
   if (wanted.has("govt-exam")) keys.push("govt-exams");
+  if (wanted.has("study-abroad")) keys.push("study-abroad");
   return keys;
+}
+
+/* ---------------------- official-portal allow-lists ---------------------- */
+
+/**
+ * The categories with no job-board API — scholarships, government-exam
+ * notifications and study-abroad programmes — are exactly the ones where an
+ * unrestricted web search returns affiliate "scholarship blog" sites. So these
+ * three channels are restricted to a curated list of *official* portals: the
+ * awarding body, the ministry, or the government education agency itself.
+ *
+ * A result from any other host is never fetched, never stored and never scored.
+ *
+ * Set the matching environment variable to **replace** the built-in list — the
+ * right move outside India, or if you only care about one country:
+ * EXA_SCHOLARSHIP_DOMAINS, EXA_EXAM_DOMAINS, EXA_STUDY_ABROAD_DOMAINS.
+ */
+export const OFFICIAL_PORTAL_DOMAINS: Record<string, readonly string[]> = {
+  scholarships: [
+    "scholarships.gov.in", // National Scholarship Portal (Govt of India)
+    "education.gov.in", // Ministry of Education
+    "ugc.gov.in",
+    "aicte-india.org",
+    "chevening.org", // UK government
+    "cscuk.fcdo.gov.uk", // Commonwealth Scholarships (UK FCDO)
+    "daad.de",
+    "erasmus-plus.ec.europa.eu",
+    "fulbright.org",
+  ],
+  "govt-exams": [
+    "upsc.gov.in",
+    "ssc.gov.in",
+    "ibps.in",
+    "indianrailways.gov.in", // RRB
+    "nta.ac.in", // National Testing Agency
+    "employmentnews.gov.in", // official weekly bulletin
+    "rbi.org.in",
+    "sbi.co.in",
+  ],
+  "study-abroad": [
+    "daad.de",
+    "study-in-germany.de",
+    "erasmus-plus.ec.europa.eu",
+    "fulbright.org",
+    "educationusa.state.gov",
+    "campusfrance.org",
+    "studyinaustralia.gov.au",
+    "educanada.ca",
+  ],
+};
+
+const DOMAIN_ENV: Record<string, string> = {
+  scholarships: "EXA_SCHOLARSHIP_DOMAINS",
+  "govt-exams": "EXA_EXAM_DOMAINS",
+  "study-abroad": "EXA_STUDY_ABROAD_DOMAINS",
+};
+
+/**
+ * Accepts what people actually paste — "https://www.daad.de/en/study" — and
+ * returns the bare host "daad.de". Without this a pasted URL would silently
+ * restrict the channel to nothing and it would look like the source was broken.
+ */
+export function normalizeDomainEntry(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .split(/[/?#]/)[0]
+    .trim()
+    .toLowerCase();
+}
+
+function cleanedDomains(name: string): string[] {
+  return [...new Set(envList(name).map(normalizeDomainEntry).filter(Boolean))];
+}
+
+/**
+ * The domain allow-list for a channel. `undefined` means "not domain
+ * restricted": job boards are fine unrestricted, and the community channel is
+ * opt-in, so it has no built-in list at all (it needs the user's own).
+ */
+export function domainsFor(key: SearchChannelKey): string[] | undefined {
+  const envName = DOMAIN_ENV[key];
+  if (envName) {
+    const override = cleanedDomains(envName);
+    if (override.length > 0) return override;
+  }
+  const builtIn = OFFICIAL_PORTAL_DOMAINS[key];
+  if (builtIn) return [...builtIn];
+  if (key === "community") {
+    const community = cleanedDomains("EXA_COMMUNITY_DOMAINS");
+    return community.length > 0 ? community : undefined;
+  }
+  return undefined;
 }
 
 export interface ChannelPlan {
@@ -138,8 +241,8 @@ export function buildChannelPlan(
 ): ChannelPlan[] {
   const year = new Date(now).getUTCFullYear();
   const keys = channelKeysFor(profile);
-  const communityDomains = envList("EXA_COMMUNITY_DOMAINS");
-  if (communityDomains.length > 0) keys.push("community");
+  const communityDomains = domainsFor("community");
+  if (communityDomains) keys.push("community");
 
   return keys
     .map((key) => SEARCH_CHANNELS.find((c) => c.key === key))
@@ -147,8 +250,7 @@ export function buildChannelPlan(
     .map((channel) => ({
       channel,
       query: channel.buildQuery(profile, year),
-      includeDomains:
-        channel.key === "community" ? communityDomains : channel.includeDomains,
+      includeDomains: domainsFor(channel.key) ?? channel.includeDomains,
     }));
 }
 
@@ -262,10 +364,9 @@ export async function collectChannel(
   const channel = SEARCH_CHANNELS.find((c) => c.key === key);
   if (!channel) return [];
   if (!channelKeysFor(profile).includes(key) && key !== "community") return [];
-  const domains =
-    channel.key === "community"
-      ? envList("EXA_COMMUNITY_DOMAINS")
-      : channel.includeDomains;
+  const domains = domainsFor(key) ?? channel.includeDomains;
+  // The community channel is opt-in: without an explicit allow-list it would
+  // only add noise, so it does not run.
   if (channel.key === "community" && (domains ?? []).length === 0) return [];
   const year = new Date(now).getUTCFullYear();
   const data = await callExa(channel.buildQuery(profile, year), domains);

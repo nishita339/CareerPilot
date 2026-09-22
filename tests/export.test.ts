@@ -74,6 +74,21 @@ const jobs: ExportJob[] = [
     status: "New",
     scrapedAt: Date.UTC(2026, 8, 11),
   },
+  {
+    _id: "job_5",
+    source: "Web · Study abroad",
+    opportunityType: "study-abroad",
+    organization: "DAAD (Germany)",
+    title: "Master's Programme in Data Science — Study in Germany",
+    location: "Munich, Germany",
+    url: "https://www.daad.de/en/study-and-research-in-germany/msc",
+    matchScore: 70,
+    matchedSkills: ["Python"],
+    missingSkills: ["German"],
+    deadline: "2027-03-15",
+    status: "New",
+    scrapedAt: Date.UTC(2026, 8, 12),
+  },
 ];
 
 const profile = {
@@ -293,6 +308,7 @@ describe("Excel export", () => {
     // Sections the boards do not carry get their own tabs and keep their rows.
     expect(wb.getWorksheet("Scholarships")!.rowCount).toBe(2);
     expect(wb.getWorksheet("Govt Exams")!.rowCount).toBe(2);
+    expect(wb.getWorksheet("Study Abroad")!.rowCount).toBe(2);
   });
 
   test("autopilot and new sections are visible in the sheet", async () => {
@@ -309,6 +325,11 @@ describe("Excel export", () => {
 
     const exams = wb.getWorksheet("Govt Exams")!;
     expect(exams.getRow(2).getCell(3).value).toBe("govt-exam");
+
+    const abroad = wb.getWorksheet("Study Abroad")!;
+    expect(abroad.getRow(2).getCell(3).value).toBe("study-abroad");
+    expect(abroad.getRow(2).getCell(4).value).toBe("DAAD (Germany)");
+    expect(abroad.getRow(2).getCell(11).value).toBe("2027-03-15");
   });
 
   test("dashboard summary reports counts, cap and policy", async () => {
@@ -323,13 +344,14 @@ describe("Excel export", () => {
       if (key === "Policy") policies.push(String(value));
       else metrics.set(key, value);
     });
-    expect(metrics.get("Total tracked")).toBe(4);
+    expect(metrics.get("Total tracked")).toBe(5);
     expect(metrics.get("Shortlisted")).toBe(2);
     expect(metrics.get("Applied")).toBe(1);
     expect(metrics.get("Internships")).toBe(1);
     expect(metrics.get("Research")).toBe(1);
     expect(metrics.get("Scholarships")).toBe(1);
     expect(metrics.get("Government exams")).toBe(1);
+    expect(metrics.get("Study abroad")).toBe(1);
     expect(metrics.get("Daily application cap")).toBe(10);
     expect(metrics.get("Applications left today")).toBe(9);
     expect(metrics.get("Applied today")).toBe(1);

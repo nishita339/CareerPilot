@@ -1477,6 +1477,9 @@ function ProfileDialog({
     ["internship", "Internships"],
     ["research", "Research"],
     ["fellowship", "Fellowships"],
+    ["scholarship", "Scholarships"],
+    ["govt-exam", "Government exams"],
+    ["study-abroad", "Study abroad"],
   ] as const;
 
   return (

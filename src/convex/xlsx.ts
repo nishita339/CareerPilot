@@ -45,6 +45,7 @@ export const SHEET_NAMES = [
   "Research",
   "Scholarships",
   "Govt Exams",
+  "Study Abroad",
   "Shortlisted",
   "Applied",
   "Dashboard Summary",
@@ -139,6 +140,11 @@ export async function buildWorkbookBytes(
     "Govt Exams",
     sorted.filter((j) => j.opportunityType === "govt-exam"),
   );
+  addJobsSheet(
+    wb,
+    "Study Abroad",
+    sorted.filter((j) => j.opportunityType === "study-abroad"),
+  );
   addJobsSheet(wb, "Shortlisted", sorted.filter((j) => j.status === "Shortlisted"));
   addJobsSheet(wb, "Applied", sorted.filter((j) => j.status === "Applied"));
 
@@ -197,6 +203,7 @@ export async function buildWorkbookBytes(
     ["Fellowships", typeCount("fellowship")],
     ["Scholarships", typeCount("scholarship")],
     ["Government exams", typeCount("govt-exam")],
+    ["Study abroad", typeCount("study-abroad")],
     ["", ""],
     ["Average match score", avgScore],
     ["Applied today", appliedToday],

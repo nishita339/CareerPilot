@@ -52,6 +52,7 @@ export const OPPORTUNITY_SECTIONS: {
       "fellowship",
       "scholarship",
       "govt-exam",
+      "study-abroad",
     ],
   },
   { key: "job", label: "Jobs", types: ["job"] },
@@ -59,6 +60,7 @@ export const OPPORTUNITY_SECTIONS: {
   { key: "research", label: "Research", types: ["research", "fellowship"] },
   { key: "scholarship", label: "Scholarships", types: ["scholarship"] },
   { key: "govt-exam", label: "Government exams", types: ["govt-exam"] },
+  { key: "study-abroad", label: "Study abroad", types: ["study-abroad"] },
 ];
 
 /** Opportunity types that describe paid employment (never scholarships/exams). */

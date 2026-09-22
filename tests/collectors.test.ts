@@ -6,6 +6,7 @@ import {
   envList,
   envValue,
 } from "../src/convex/collectors";
+import { SEARCH_CHANNELS } from "../src/convex/websearch";
 
 const MANAGED = [
   "ADZUNA_APP_ID",
@@ -16,6 +17,9 @@ const MANAGED = [
   "SEMANTIC_SCHOLAR_API_KEY",
   "EXA_API_KEY",
   "EXA_COMMUNITY_DOMAINS",
+  "EXA_SCHOLARSHIP_DOMAINS",
+  "EXA_EXAM_DOMAINS",
+  "EXA_STUDY_ABROAD_DOMAINS",
 ];
 const saved: Record<string, string | undefined> = {};
 
@@ -94,11 +98,15 @@ describe("environment-driven collector config", () => {
   test("collectors without credentials are reported as configured", () => {
     const statuses = collectorStatuses();
     const byName = new Map(statuses.map((s) => [s.name, s]));
-    // 8 board collectors + one entry per open-web channel.
-    expect(statuses).toHaveLength(14);
+    // 8 board collectors + one entry per open-web channel. The channel count is
+    // derived, so adding a section can never silently break this assertion.
+    const boardCount = statuses.filter((s) => !s.name.startsWith("Web · ")).length;
+    expect(boardCount).toBe(8);
+    expect(statuses).toHaveLength(boardCount + SEARCH_CHANNELS.length);
     expect(byName.get("RemoteOK")?.configured).toBe(true);
     expect(byName.get("Remotive")?.configured).toBe(true);
     expect(byName.get("arXiv")?.configured).toBe(true);
+    expect(byName.get("Web · Study abroad")).toBeTruthy();
   });
 
   test("keyed collectors stay inactive until their env vars exist", () => {
