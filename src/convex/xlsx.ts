@@ -19,6 +19,7 @@ export interface ExportJob {
   status: string;
   scrapedAt: number;
   appliedAt?: number;
+  autoApplied?: boolean;
   notes?: string;
 }
 
@@ -27,13 +28,23 @@ export interface ExportProfile {
   targetRoles: string[];
   minMatchScore: number;
   maxApplicationsPerDay: number;
+  autoApplyEnabled?: boolean;
+  autoApplyMinScore?: number;
+  autoApplyDailyLimit?: number;
 }
 
+/**
+ * One sheet per section, so jobs, internships, research, scholarships and
+ * government exams never blur into one list. "All" and the pipeline views come
+ * first so the useful tabs are the ones you land on.
+ */
 export const SHEET_NAMES = [
   "All",
   "Jobs",
   "Internships",
   "Research",
+  "Scholarships",
+  "Govt Exams",
   "Shortlisted",
   "Applied",
   "Dashboard Summary",
@@ -41,8 +52,8 @@ export const SHEET_NAMES = [
 
 const COLUMNS: { header: string; width: number }[] = [
   { header: "Job_ID", width: 26 },
-  { header: "Platform_Source", width: 18 },
-  { header: "Type", width: 12 },
+  { header: "Platform_Source", width: 22 },
+  { header: "Type", width: 14 },
   { header: "Organization", width: 28 },
   { header: "Title", width: 44 },
   { header: "Location", width: 24 },
@@ -54,6 +65,7 @@ const COLUMNS: { header: string; width: number }[] = [
   { header: "Status", width: 16 },
   { header: "Date_Scraped", width: 20 },
   { header: "Date_Applied", width: 20 },
+  { header: "Auto_Applied", width: 13 },
   { header: "Notes", width: 40 },
 ];
 
@@ -77,6 +89,7 @@ function rowsFor(jobs: ExportJob[]): unknown[][] {
     j.status,
     iso(j.scrapedAt),
     iso(j.appliedAt),
+    j.autoApplied ? "Yes" : "",
     j.notes ?? "",
   ]);
 }
@@ -116,6 +129,16 @@ export async function buildWorkbookBytes(
     "Research",
     sorted.filter((j) => ["research", "fellowship"].includes(j.opportunityType)),
   );
+  addJobsSheet(
+    wb,
+    "Scholarships",
+    sorted.filter((j) => j.opportunityType === "scholarship"),
+  );
+  addJobsSheet(
+    wb,
+    "Govt Exams",
+    sorted.filter((j) => j.opportunityType === "govt-exam"),
+  );
   addJobsSheet(wb, "Shortlisted", sorted.filter((j) => j.status === "Shortlisted"));
   addJobsSheet(wb, "Applied", sorted.filter((j) => j.status === "Applied"));
 
@@ -123,7 +146,7 @@ export async function buildWorkbookBytes(
   const summary = wb.addWorksheet("Dashboard Summary");
   summary.columns = [
     { header: "Metric", width: 34 },
-    { header: "Value", width: 46 },
+    { header: "Value", width: 52 },
   ];
   summary.getRow(1).font = { bold: true };
 
@@ -141,6 +164,9 @@ export async function buildWorkbookBytes(
   today.setHours(0, 0, 0, 0);
   const appliedToday = jobs.filter((j) => (j.appliedAt ?? 0) >= today.getTime())
     .length;
+  const autoAppliedToday = jobs.filter(
+    (j) => j.autoApplied && (j.appliedAt ?? 0) >= today.getTime(),
+  ).length;
 
   const summaryRows: [string, string | number][] = [
     ["Generated", new Date().toISOString()],
@@ -148,6 +174,12 @@ export async function buildWorkbookBytes(
     ["Target roles", profile.targetRoles.join(", ")],
     ["Minimum match score", profile.minMatchScore],
     ["Daily application cap", profile.maxApplicationsPerDay],
+    [
+      "Autopilot",
+      profile.autoApplyEnabled
+        ? `Armed · min score ${profile.autoApplyMinScore ?? 85} · ${profile.autoApplyDailyLimit ?? 2}/day`
+        : "Off — every application is approved by hand",
+    ],
     ["", ""],
     ["Total tracked", jobs.length],
     ["Shortlisted", count("Shortlisted")],
@@ -163,9 +195,12 @@ export async function buildWorkbookBytes(
     ["Internships", typeCount("internship")],
     ["Research", typeCount("research")],
     ["Fellowships", typeCount("fellowship")],
+    ["Scholarships", typeCount("scholarship")],
+    ["Government exams", typeCount("govt-exam")],
     ["", ""],
     ["Average match score", avgScore],
     ["Applied today", appliedToday],
+    ["of which autopilot", autoAppliedToday],
     [
       "Applications left today",
       Math.max(0, profile.maxApplicationsPerDay - appliedToday),
@@ -174,11 +209,15 @@ export async function buildWorkbookBytes(
     ["Platform sources", sources.join(", ")],
     [
       "Policy",
-      "Public APIs and public boards only · no login-wall scraping · no anti-detection tooling",
+      "Public APIs, public boards and a public search index only · no login-wall scraping · no anti-detection tooling",
     ],
     [
       "Policy",
-      "Email applications only after explicit approval; web forms stay manual",
+      "Autopilot emails approved-quality roles on your instruction: validator-clean, above the autopilot score, inside its own daily limit. Web forms are never filled or submitted.",
+    ],
+    [
+      "Notes column",
+      "Notes and Status are edited inside the app; this export is a snapshot, so edits made here do not flow back.",
     ],
     [
       "Privacy",

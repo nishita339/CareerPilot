@@ -45,6 +45,22 @@ export default defineSchema({
     minMatchScore: v.number(),
     maxApplicationsPerDay: v.number(),
     blacklistCompanies: v.optional(v.string()),
+    /** Country used to target scholarship and government-exam searches. */
+    country: v.optional(v.string()),
+    /** The student's own resume: pasted text, and/or an uploaded PDF kept in
+     *  storage with its filename. This is the only resume the tailoring engine
+     *  is allowed to draw facts from. */
+    masterResumeText: v.optional(v.string()),
+    resumeFileId: v.optional(v.id("_storage")),
+    resumeFileName: v.optional(v.string()),
+    /** Set once the mandatory setup step has been completed. */
+    onboardedAt: v.optional(v.number()),
+    /** Autopilot: pre-authorised email applications. Off unless armed, and
+     *  bounded by its own score floor and daily limit (see autopilotRules). */
+    autoApplyEnabled: v.optional(v.boolean()),
+    autoApplyMinScore: v.optional(v.number()),
+    autoApplyDailyLimit: v.optional(v.number()),
+    autoApplyTypes: v.optional(v.array(v.string())),
     /** Demo mode: include sample listings so the pipeline can be explored
      *  without configuring any collector API keys. Off by default. */
     demoMode: v.optional(v.boolean()),
@@ -90,6 +106,9 @@ export default defineSchema({
     /** Status to restore if the user undoes a hand-recorded application.
      *  Only set by the manual path — email sends cannot be undone. */
     preApplyStatus: v.optional(v.string()),
+    /** True when autopilot approved and sent this role without a human click. */
+    autoApplied: v.optional(v.boolean()),
+    autoAppliedAt: v.optional(v.number()),
     scrapedAt: v.number(),
     notes: v.optional(v.string()),
   })

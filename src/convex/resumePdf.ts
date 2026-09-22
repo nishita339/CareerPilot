@@ -6,6 +6,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { asResumeDoc } from "./resume";
 import { buildResumePdf, pdfWarnings, resumePdfFilename } from "./pdf";
+import { withFileRef } from "./fileRefs";
 
 export interface PdfExportResult {
   url: string | null;
@@ -40,23 +41,27 @@ export const exportResumePdf = action({
       userId,
       jobId,
       action: "exported resume PDF",
-      detail: job.title,
+      // The `file:` ref lets "Delete all my data" remove the blob too.
+      detail: withFileRef(job.title, storageId),
     });
 
     return { url, filename, warnings: pdfWarnings(built) };
   },
 });
 
-/** Internal: same bytes as base64, so an approved application can attach it. */
+/**
+ * Internal: the same bytes as base64, so an approved application can attach it.
+ * Takes an explicit userId because autopilot and the daily scheduler call it
+ * without an auth identity.
+ */
 export const renderResumePdfBase64 = internalAction({
-  args: { jobId: v.id("jobs") },
+  args: { userId: v.id("users"), jobId: v.id("jobs") },
   handler: async (
     ctx,
-    { jobId },
+    { userId, jobId },
   ): Promise<{ base64: string; filename: string; warnings: string[] } | null> => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Sign in required.");
-    const { job } = await ctx.runQuery(internal.private.getProfileAndJob, {
+    const { job } = await ctx.runQuery(internal.private.getProfileAndJobForUser, {
+      userId,
       jobId,
     });
     if (!job) return null;

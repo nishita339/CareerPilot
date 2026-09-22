@@ -4,6 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { buildWorkbookBytes, XLSX_FILENAME, type ExportJob } from "./xlsx";
+import { withFileRef } from "./fileRefs";
 
 export interface ExcelExportResult {
   url: string | null;
@@ -35,6 +36,7 @@ export const exportExcel = action({
       status: j.status,
       scrapedAt: j.scrapedAt,
       appliedAt: j.appliedAt,
+      autoApplied: j.autoApplied,
       notes: j.notes,
     }));
 
@@ -44,6 +46,9 @@ export const exportExcel = action({
         targetRoles: profile.targetRoles,
         minMatchScore: profile.minMatchScore,
         maxApplicationsPerDay: profile.maxApplicationsPerDay,
+        autoApplyEnabled: profile.autoApplyEnabled,
+        autoApplyMinScore: profile.autoApplyMinScore,
+        autoApplyDailyLimit: profile.autoApplyDailyLimit,
       },
       rows,
     );
@@ -58,7 +63,8 @@ export const exportExcel = action({
     await ctx.runMutation(internal.private.logActivity, {
       userId,
       action: "exported Excel",
-      detail: `${XLSX_FILENAME} · ${rows.length} rows`,
+      // The `file:` ref lets "Delete all my data" remove the blob too.
+      detail: withFileRef(`${XLSX_FILENAME} · ${rows.length} rows`, storageId),
     });
 
     return { url, filename: XLSX_FILENAME, rows: rows.length };

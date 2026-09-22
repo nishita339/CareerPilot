@@ -8,6 +8,7 @@ import {
   collectorStatuses,
   type RawJob,
 } from "./collectors";
+import type { SearchProfile } from "./websearch";
 
 export interface CollectSummary {
   fetched: number;
@@ -19,6 +20,23 @@ export interface CollectSummary {
   skipped: { name: string; reason: string }[];
   errors: string[];
   demoMode: boolean;
+}
+
+/** Everything a collector needs to know about the student. */
+function searchProfileFor(profile: {
+  major: string;
+  targetRoles: string[];
+  locations?: string;
+  country?: string;
+  opportunityTypes: string[];
+}): SearchProfile {
+  return {
+    major: profile.major,
+    targetRoles: profile.targetRoles,
+    locations: profile.locations,
+    country: profile.country,
+    opportunityTypes: profile.opportunityTypes,
+  };
 }
 
 /** Runs the configured collectors, then dedupes, filters and scores. */
@@ -35,6 +53,7 @@ export const collect = action({
     if (searchTerms.length === 0) searchTerms.push("software engineer");
     const location =
       (profile.locations ?? "").split(/[,\n]/)[0]?.trim() || "";
+    const searchProfile = searchProfileFor(profile);
 
     const collected: RawJob[] = [];
     const ran: string[] = [];
@@ -49,8 +68,19 @@ export const collect = action({
         });
         continue;
       }
+      if (collector.enabledFor && !collector.enabledFor(searchProfile)) {
+        skipped.push({
+          name: collector.name,
+          reason: "not one of your selected opportunity types",
+        });
+        continue;
+      }
       try {
-        const jobs = await collector.run(searchTerms, location);
+        const jobs = await collector.run({
+          searchTerms,
+          location,
+          profile: searchProfile,
+        });
         collected.push(...jobs);
         ran.push(collector.name);
       } catch (err) {
@@ -98,10 +128,13 @@ export const collectorStatus = query({
           .withIndex("by_user", (q) => q.eq("userId", userId))
           .unique()
       : null;
-    const statuses = collectorStatuses();
+    const statuses = collectorStatuses(
+      profile ? searchProfileFor(profile) : undefined,
+    );
     return {
       collectors: statuses,
       configuredCount: statuses.filter((s) => s.configured).length,
+      enabledCount: statuses.filter((s) => s.configured && s.enabled).length,
       demoMode: profile?.demoMode === true,
     };
   },

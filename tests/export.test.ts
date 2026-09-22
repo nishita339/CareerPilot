@@ -42,6 +42,37 @@ const jobs: ExportJob[] = [
     status: "Applied",
     scrapedAt: Date.UTC(2026, 7, 20),
     appliedAt: Date.now(), // applied today — exercises the remaining-quota math
+    autoApplied: true, // and exercises the Auto_Applied column
+  },
+  {
+    _id: "job_3",
+    source: "Web · Scholarships",
+    opportunityType: "scholarship",
+    organization: "Helios Foundation",
+    title: "Merit Scholarship for Undergraduate STEM Students",
+    location: "Remote / international",
+    url: "https://example.com/scholarships/merit-stem",
+    matchScore: 91,
+    matchedSkills: ["Python"],
+    missingSkills: [],
+    deadline: "2026-11-30",
+    status: "Shortlisted",
+    scrapedAt: Date.UTC(2026, 8, 10),
+  },
+  {
+    _id: "job_4",
+    source: "Web · Government exams",
+    opportunityType: "govt-exam",
+    organization: "Public Service Commission",
+    title: "Graduate Level Engineering Services Examination — Notification",
+    location: "Nationwide",
+    url: "https://example.com/exams/engineering-services",
+    matchScore: 64,
+    matchedSkills: [],
+    missingSkills: [],
+    deadline: "2027-01-20",
+    status: "New",
+    scrapedAt: Date.UTC(2026, 8, 11),
   },
 ];
 
@@ -237,23 +268,47 @@ describe("Excel export", () => {
   test("rows land in the right tab with mapped values", async () => {
     const { wb } = await loadWorkbook();
     const all = wb.getWorksheet("All")!;
-    const first = all.getRow(2);
-    // Sorted by match score: the 88-scoring internship comes first.
-    expect(first.getCell(5).value).toBe("Software Engineering Intern");
-    expect(first.getCell(8).value).toBe(88);
-    expect(first.getCell(9).value).toBe("TypeScript, React");
-    expect(first.getCell(10).value).toBe("GraphQL");
-    expect(first.getCell(11).value).toBe("2026-10-15");
-    expect(first.getCell(12).value).toBe("Shortlisted");
-    expect(first.getCell(13).value).toBe("2026-09-01");
-    expect(first.getCell(14).value).toBe("");
-    expect(first.getCell(15).value).toBe("Referral: Priya");
+    // Sorted by match score: the 91-scoring scholarship, then the 88 internship.
+    expect(all.getRow(2).getCell(5).value).toBe(
+      "Merit Scholarship for Undergraduate STEM Students",
+    );
+
+    const internship = all.getRow(3);
+    expect(internship.getCell(5).value).toBe("Software Engineering Intern");
+    expect(internship.getCell(8).value).toBe(88);
+    expect(internship.getCell(9).value).toBe("TypeScript, React");
+    expect(internship.getCell(10).value).toBe("GraphQL");
+    expect(internship.getCell(11).value).toBe("2026-10-15");
+    expect(internship.getCell(12).value).toBe("Shortlisted");
+    expect(internship.getCell(13).value).toBe("2026-09-01");
+    expect(internship.getCell(14).value).toBe("");
+    expect(internship.getCell(15).value).toBe(""); // Auto_Applied: not this row
+    expect(internship.getCell(16).value).toBe("Referral: Priya");
 
     expect(wb.getWorksheet("Internships")!.rowCount).toBe(2); // header + 1
     expect(wb.getWorksheet("Research")!.rowCount).toBe(2);
     expect(wb.getWorksheet("Jobs")!.rowCount).toBe(1); // header only
-    expect(wb.getWorksheet("Shortlisted")!.rowCount).toBe(2);
+    expect(wb.getWorksheet("Shortlisted")!.rowCount).toBe(3);
     expect(wb.getWorksheet("Applied")!.rowCount).toBe(2);
+    // Sections the boards do not carry get their own tabs and keep their rows.
+    expect(wb.getWorksheet("Scholarships")!.rowCount).toBe(2);
+    expect(wb.getWorksheet("Govt Exams")!.rowCount).toBe(2);
+  });
+
+  test("autopilot and new sections are visible in the sheet", async () => {
+    const { wb } = await loadWorkbook();
+    const applied = wb.getWorksheet("Applied")!;
+    const row = applied.getRow(2);
+    expect(row.getCell(15).value).toBe("Yes"); // sent by autopilot
+
+    const scholarships = wb.getWorksheet("Scholarships")!;
+    expect(scholarships.getRow(2).getCell(5).value).toBe(
+      "Merit Scholarship for Undergraduate STEM Students",
+    );
+    expect(scholarships.getRow(2).getCell(3).value).toBe("scholarship");
+
+    const exams = wb.getWorksheet("Govt Exams")!;
+    expect(exams.getRow(2).getCell(3).value).toBe("govt-exam");
   });
 
   test("dashboard summary reports counts, cap and policy", async () => {
@@ -268,16 +323,38 @@ describe("Excel export", () => {
       if (key === "Policy") policies.push(String(value));
       else metrics.set(key, value);
     });
-    expect(metrics.get("Total tracked")).toBe(2);
-    expect(metrics.get("Shortlisted")).toBe(1);
+    expect(metrics.get("Total tracked")).toBe(4);
+    expect(metrics.get("Shortlisted")).toBe(2);
     expect(metrics.get("Applied")).toBe(1);
     expect(metrics.get("Internships")).toBe(1);
     expect(metrics.get("Research")).toBe(1);
+    expect(metrics.get("Scholarships")).toBe(1);
+    expect(metrics.get("Government exams")).toBe(1);
     expect(metrics.get("Daily application cap")).toBe(10);
     expect(metrics.get("Applications left today")).toBe(9);
     expect(metrics.get("Applied today")).toBe(1);
+    expect(metrics.get("of which autopilot")).toBe(1);
+    expect(metrics.get("Autopilot")).toBe("Off — every application is approved by hand");
     expect(policies.join(" ")).toContain("no anti-detection tooling");
-    expect(policies.join(" ")).toContain("after explicit approval");
+    expect(policies.join(" ")).toContain("validator-clean");
+    expect(policies.join(" ")).toContain("never filled or submitted");
+  });
+
+  test("the summary reflects an armed autopilot", async () => {
+    const bytes = await buildWorkbookBytes(
+      { ...profile, autoApplyEnabled: true, autoApplyMinScore: 88, autoApplyDailyLimit: 2 },
+      jobs,
+    );
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(Buffer.from(bytes));
+    const summary = wb.getWorksheet("Dashboard Summary")!;
+    let autopilot = "";
+    summary.eachRow((row) => {
+      if (row.getCell(1).value === "Autopilot") autopilot = String(row.getCell(2).value);
+    });
+    expect(autopilot).toContain("Armed");
+    expect(autopilot).toContain("min score 88");
+    expect(autopilot).toContain("2/day");
   });
 
   test("empty pipeline still yields a valid workbook", async () => {

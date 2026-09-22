@@ -23,6 +23,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
 import {
   Activity,
+  Bot,
   Check,
   ClipboardList,
   Copy,
@@ -30,6 +31,7 @@ import {
   FileDown,
   FileText,
   Inbox,
+  Lightbulb,
   Link2,
   Loader2,
   Lock,
@@ -45,8 +47,15 @@ import {
   UserRoundCog,
   X,
 } from "lucide-react";
-import { useNavigate } from "react-router";
+import { Navigate, useNavigate } from "react-router";
 import { asResumeDoc, htmlToPlainText, renderResumeText } from "@/convex/resume";
+import { OPPORTUNITY_SECTIONS } from "@/convex/policy";
+import {
+  buildSuggestions,
+  setupStatus,
+  type Suggestion,
+} from "@/convex/suggestions";
+import { isDueWithin } from "@/convex/deadlines";
 
 type Job = Doc<"jobs">;
 
@@ -63,6 +72,12 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 const FILTERS = ["All", "Shortlisted", "Resume Ready", "Approved", "Applied", "New", "Rejected"] as const;
+
+const SEVERITY_STYLES: Record<Suggestion["severity"], string> = {
+  high: "border-destructive/40 text-destructive",
+  medium: "border-foreground/25 text-foreground",
+  low: "border-border text-muted-foreground",
+};
 
 function statusBadge(status: string) {
   return (
@@ -128,19 +143,42 @@ export default function Dashboard() {
   const exportExcel = useAction(api.exportXlsx.exportExcel);
   const sendDigest = useAction(api.digest.sendDailyDigest);
   const collectorStatus = useQuery(api.collect.collectorStatus, {});
+  const autopilot = useQuery(api.autopilot.autopilotStatus);
+  const runAutopilot = useAction(api.autopilot.runAutopilot);
+  const armAutopilot = useMutation(api.profiles.setAutopilot);
   const [privacyOpen, setPrivacyOpen] = useState(false);
 
+  const [section, setSection] = useState<string>("all");
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("All");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<Id<"jobs"> | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(true);
+
+  const sectionTypes = useMemo(
+    () =>
+      OPPORTUNITY_SECTIONS.find((s) => s.key === section)?.types ??
+      OPPORTUNITY_SECTIONS[0].types,
+    [section],
+  );
+
+  const sectionCounts = useMemo(() => {
+    const list = jobs ?? [];
+    return Object.fromEntries(
+      OPPORTUNITY_SECTIONS.map((s) => [
+        s.key,
+        list.filter((j) => s.types.includes(j.opportunityType as never)).length,
+      ]),
+    ) as Record<string, number>;
+  }, [jobs]);
 
   const filtered = useMemo(() => {
     const list = jobs ?? [];
     const q = search.trim().toLowerCase();
     return list
+      .filter((j) => sectionTypes.includes(j.opportunityType as never))
       .filter((j) => (filter === "All" ? true : j.status === filter))
       .filter((j) =>
         q
@@ -148,11 +186,25 @@ export default function Dashboard() {
           : true,
       )
       .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
-  }, [jobs, filter, search]);
+  }, [jobs, filter, search, sectionTypes]);
 
   const selected = useMemo(
     () => filtered.find((j) => j._id === selectedId) ?? filtered[0] ?? null,
     [filtered, selectedId],
+  );
+
+  // Deterministic improvement list — profile gaps, resume quality, recurring
+  // skill gaps, deadlines and autopilot advice. No LLM involved.
+  const suggestions = useMemo(
+    () =>
+      profile
+        ? buildSuggestions({
+            profile,
+            jobs: jobs ?? [],
+            dueSoon: (jobs ?? []).filter((j) => isDueWithin(j.deadline, 7)).length,
+          })
+        : [],
+    [profile, jobs],
   );
 
   const handleSignOut = async () => {
@@ -160,12 +212,18 @@ export default function Dashboard() {
     navigate("/");
   };
 
-  if (jobs === undefined) {
+  if (profile === undefined || jobs === undefined) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="size-6 animate-spin text-muted-foreground" />
       </main>
     );
+  }
+
+  // Mandatory setup: the resume and the profile fields the validator relies on
+  // must exist before the pipeline is useful, so send people to finish them.
+  if (!profile || !setupStatus(profile).complete) {
+    return <Navigate to="/onboarding" replace />;
   }
 
   return (
@@ -220,40 +278,183 @@ export default function Dashboard() {
 
       <main className="mx-auto w-full max-w-6xl px-6 py-8">
         {/* Digest strip */}
-        <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-4">
-          {[
-            ["Shortlisted", digest?.shortlisted ?? 0],
-            ["Resume ready", digest?.resumeReady ?? 0],
-            ["Applied today", `${digest?.appliedToday ?? 0}/${digest?.dailyCap ?? 10}`],
-            ["Awaiting approval", digest?.awaitingApproval ?? 0],
-          ].map(([label, value]) => (
-            <div key={String(label)} className="bg-card px-5 py-4">
-              <div className="micro-label">{label}</div>
-              <div className="tnum mt-2 text-xl font-semibold tracking-tight">{value}</div>
-            </div>
-          ))}
+        <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-3 lg:grid-cols-5">
+          {
+            [
+              ["Shortlisted", digest?.shortlisted ?? 0],
+              ["Resume ready", digest?.resumeReady ?? 0],
+              ["Applied today", `${digest?.appliedToday ?? 0}/${digest?.dailyCap ?? 10}`],
+              ["Awaiting approval", digest?.awaitingApproval ?? 0],
+              ["Auto today", digest?.autoAppliedToday ?? 0],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="bg-card px-5 py-4">
+                <div className="micro-label">{label}</div>
+                <div className="tnum mt-2 text-xl font-semibold tracking-tight">{value}</div>
+              </div>
+            ))
+          }
         </div>
 
-        {!profile && (
-          <Card className="mt-6 rounded-none border-border shadow-none">
-            <CardHeader>
-              <CardTitle className="text-base">Start with your Master Profile</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3 text-sm leading-6 text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-              <span className="max-w-xl">
-                Resume quality comes from an honest, complete profile — it is the
-                only source the tailoring engine may use, and the validator checks
-                every claim against it.
-              </span>
-              <Button className="rounded-none self-start" onClick={() => setProfileOpen(true)}>
-                Fill it now
+        {/* Autopilot + improvement suggestions */}
+        <div className="mt-6 grid gap-px border border-border bg-border lg:grid-cols-2">
+          <div className="bg-card px-5 py-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <Bot className="size-3.5 text-muted-foreground" />
+                <span className="micro-label">Autopilot</span>
+                {autopilot?.enabled && (
+                  <Badge variant="outline" className="rounded-none border-primary/40 text-[10px] uppercase tracking-wide text-primary">
+                    armed
+                  </Badge>
+                )}
+              </div>
+              <Switch
+                checked={autopilot?.enabled ?? false}
+                disabled={busy !== null}
+                onCheckedChange={async (checked) => {
+                  setBusy("autopilotArm");
+                  try {
+                    await armAutopilot({ enabled: checked });
+                    toast.success(
+                      checked
+                        ? "Autopilot armed — email roles only, above your autopilot score, inside its own daily limit"
+                        : "Autopilot disarmed — every application needs your approval again",
+                    );
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : "Could not change autopilot");
+                  } finally {
+                    setBusy(null);
+                  }
+                }}
+              />
+            </div>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">
+              {autopilot?.enabled
+                ? `Emails shortlisted roles scoring ${autopilot.minScore}+ with a verified address and a validator-clean resume, up to ${autopilot.dailyLimit}/day, never twice at the same company inside the cooldown. Web forms are never touched.`
+                : "Off. Turn it on to let the daily run email high-scoring roles on your behalf. Everything else — and every web form — still waits for you."}
+            </p>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 rounded-none"
+                disabled={busy !== null}
+                onClick={async () => {
+                  setBusy("autopilotRun");
+                  try {
+                    const r = await runAutopilot({});
+                    if (!r.enabled) {
+                      toast.warning("Autopilot is not armed — turn it on first");
+                    } else {
+                      if (r.applied.length > 0)
+                        toast.success(
+                          `Autopilot sent ${r.applied.length} application${r.applied.length === 1 ? "" : "s"}`,
+                        );
+                      for (const s of r.needsReview)
+                        toast.warning(`${s.organization} needs review: ${s.reason}`);
+                      for (const s of r.blocked.slice(0, 2))
+                        toast.warning(`${s.organization}: ${s.reason}`);
+                      if (r.applied.length === 0 && r.needsReview.length === 0)
+                        toast.info("Nothing qualified right now");
+                    }
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : "Autopilot failed");
+                  } finally {
+                    setBusy(null);
+                  }
+                }}
+              >
+                {busy === "autopilotRun" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Bot className="size-3.5" />
+                )}
+                Run autopilot now
               </Button>
-            </CardContent>
-          </Card>
-        )}
+              <span className="text-xs text-muted-foreground">
+                {autopilot?.queued
+                  ? `${autopilot.queued} role${autopilot.queued === 1 ? "" : "s"} already clear the autopilot bar`
+                  : "No role clears the autopilot bar yet"}
+              </span>
+            </div>
+          </div>
+
+          <div className="bg-card px-5 py-5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Lightbulb className="size-3.5 text-muted-foreground" />
+                <span className="micro-label">Improve your chances</span>
+              </div>
+              <button
+                className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                onClick={() => setShowSuggestions((v) => !v)}
+              >
+                {showSuggestions ? "Hide" : `Show ${suggestions.length}`}
+              </button>
+            </div>
+            {showSuggestions &&
+              (suggestions.length === 0 ? (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  Nothing to fix right now — profile complete, resume has numbers,
+                  no validator flags and no deadline inside a week.
+                </p>
+              ) : (
+                <ul className="mt-3 space-y-2.5">
+                  {suggestions.slice(0, 5).map((s) => (
+                    <li key={s.id} className="border-l-2 border-border pl-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${SEVERITY_STYLES[s.severity]}`}
+                        >
+                          {s.area}
+                        </span>
+                        <span className="text-sm font-medium">{s.title}</span>
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        {s.detail}
+                      </p>
+                    </li>
+                  ))}
+                  {suggestions.length > 5 && (
+                    <li className="text-xs text-muted-foreground">
+                      +{suggestions.length - 5} more — fix the top ones first.
+                    </li>
+                  )}
+                </ul>
+              ))}
+          </div>
+        </div>
+
+        {/* Sections — jobs, internships, research and the rest stay separate */}
+        <div className="mt-6 grid gap-px border border-border bg-border sm:grid-cols-3 lg:grid-cols-6">
+          {OPPORTUNITY_SECTIONS.map((s) => {
+            const active = section === s.key;
+            return (
+              <button
+                key={s.key}
+                onClick={() => {
+                  setSection(s.key);
+                  setSelectedId(null);
+                }}
+                className={`flex items-baseline justify-between gap-2 px-4 py-3 text-left transition-colors ${
+                  active ? "bg-accent" : "bg-card hover:bg-accent/60"
+                }`}
+              >
+                <span
+                  className={`text-sm ${active ? "font-medium" : "text-muted-foreground"}`}
+                >
+                  {s.label}
+                </span>
+                <span className="tnum text-xs text-muted-foreground">
+                  {sectionCounts[s.key] ?? 0}
+                </span>
+              </button>
+            );
+          })}
+        </div>
 
         {/* Controls */}
-        <div className="mt-6 flex flex-wrap items-center gap-3">
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
             <Input
@@ -419,26 +620,34 @@ export default function Dashboard() {
             <span className="text-xs text-muted-foreground">checking…</span>
           ) : (
             <div className="flex flex-wrap items-center gap-1.5">
-              {collectorStatus.collectors.map((c) => (
-                <span
-                  key={c.name}
-                  title={
-                    c.configured
-                      ? `${c.name} — active`
-                      : `${c.name} — needs ${c.requiresEnv.join(", ")} in the project environment`
-                  }
-                  className={`inline-flex items-center gap-1.5 border px-2 py-0.5 text-[11px] ${
-                    c.configured
-                      ? "border-foreground/25 text-foreground"
-                      : "border-border text-muted-foreground/70"
-                  }`}
-                >
+              {collectorStatus.collectors.map((c) => {
+                const live = c.configured && c.enabled;
+                const title = !c.configured
+                  ? `${c.name} — needs ${c.requiresEnv.join(", ")} in the project environment`
+                  : c.enabled
+                    ? `${c.name} — live for your selected opportunity types`
+                    : `${c.name} — skipped: not one of your selected opportunity types`;
+                return (
                   <span
-                    className={`size-1.5 ${c.configured ? "bg-primary" : "bg-muted-foreground/40"}`}
-                  />
-                  {c.name}
-                </span>
-              ))}
+                    key={c.name}
+                    title={title}
+                    className={`inline-flex items-center gap-1.5 border px-2 py-0.5 text-[11px] ${
+                      live
+                        ? "border-foreground/25 text-foreground"
+                        : "border-border text-muted-foreground/70"
+                    }`}
+                  >
+                    <span
+                      className={`size-1.5 ${live ? "bg-primary" : "bg-muted-foreground/40"}`}
+                    />
+                    {c.name}
+                  </span>
+                );
+              })}
+              <span className="ml-1 text-[11px] text-muted-foreground">
+                {collectorStatus.configuredCount} configured ·{" "}
+                {collectorStatus.enabledCount} live
+              </span>
               {collectorStatus.demoMode && (
                 <span className="inline-flex items-center gap-1.5 border border-primary/40 px-2 py-0.5 text-[11px] text-primary">
                   <span className="size-1.5 bg-primary" />
@@ -467,7 +676,9 @@ export default function Dashboard() {
                 <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
                   <Inbox className="size-5 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">
-                    Nothing here yet. Complete your profile, then collect jobs.
+                    Nothing in this section yet. Run Collect to search every
+                    configured source — job boards, public boards, a web search
+                    index, arXiv and Semantic Scholar.
                   </p>
                 </div>
               ) : (
@@ -610,6 +821,16 @@ function JobDetail({
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-3">
+            {job.autoApplied && (
+              <Badge
+                variant="outline"
+                className="rounded-none border-primary/40 text-[10px] uppercase tracking-wide text-primary"
+                title="Approved and emailed by autopilot on your instruction"
+              >
+                <Bot className="size-3" />
+                autopilot
+              </Badge>
+            )}
             {statusBadge(job.status)}
             <div className={`tnum text-2xl font-semibold ${scoreColor(job.matchScore)}`}>
               {job.matchScore ?? "—"}
@@ -1193,6 +1414,8 @@ function ProfileDialog({
       experience: profile.experience ?? "",
       projects: profile.projects ?? "",
       certifications: profile.certifications ?? "",
+      masterResumeText: profile.masterResumeText ?? "",
+      country: profile.country ?? "",
       targetRoles: profile.targetRoles.join(", "),
       locations: profile.locations ?? "",
       blacklistCompanies: profile.blacklistCompanies ?? "",
@@ -1228,6 +1451,8 @@ function ProfileDialog({
         experience: form.experience || undefined,
         projects: form.projects || undefined,
         certifications: form.certifications || undefined,
+        masterResumeText: form.masterResumeText || undefined,
+        country: form.country || undefined,
         targetRoles: (form.targetRoles ?? "").split(/[,;\n]/).map((s) => s.trim()).filter(Boolean),
         opportunityTypes: types,
         locations: form.locations || undefined,
@@ -1237,8 +1462,7 @@ function ProfileDialog({
         blacklistCompanies: form.blacklistCompanies || undefined,
         demoMode,
         cooldownDays,
-        digestHourUtc: digestHour,
-      });
+        digestHourUtc: digestHour,      });
       toast.success("Profile saved — the pipeline will re-score on next run");
       onOpenChange(false);
     } catch (err) {
@@ -1294,6 +1518,23 @@ function ProfileDialog({
           </Field>
           <Field label="Certifications (optional)" full>
             <Input className="rounded-none" placeholder="AWS Cloud Practitioner…" value={form.certifications ?? ""} onChange={set("certifications")} />
+          </Field>
+          <Field label="Country">
+            <Input className="rounded-none" value={form.country ?? ""} onChange={set("country")} />
+            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+              Targets scholarship and government-exam searches.
+            </p>
+          </Field>
+          <Field label="Resume text" full>
+            <Textarea
+              className="min-h-40 rounded-none font-mono text-[12.5px]"
+              value={form.masterResumeText ?? ""}
+              onChange={set("masterResumeText")}
+            />
+            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+              Your own resume. The tailoring engine may only draw facts from this
+              plus the fields above — paste it, or upload the file from Setup.
+            </p>
           </Field>
         </div>
 

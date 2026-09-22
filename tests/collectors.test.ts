@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  COLLECTORS,
   classifyOpportunity,
   collectorStatuses,
   envList,
@@ -13,6 +14,8 @@ const MANAGED = [
   "GREENHOUSE_BOARD_TOKENS",
   "LEVER_BOARD_TOKENS",
   "SEMANTIC_SCHOLAR_API_KEY",
+  "EXA_API_KEY",
+  "EXA_COMMUNITY_DOMAINS",
 ];
 const saved: Record<string, string | undefined> = {};
 
@@ -91,7 +94,8 @@ describe("environment-driven collector config", () => {
   test("collectors without credentials are reported as configured", () => {
     const statuses = collectorStatuses();
     const byName = new Map(statuses.map((s) => [s.name, s]));
-    expect(statuses).toHaveLength(8);
+    // 8 board collectors + one entry per open-web channel.
+    expect(statuses).toHaveLength(14);
     expect(byName.get("RemoteOK")?.configured).toBe(true);
     expect(byName.get("Remotive")?.configured).toBe(true);
     expect(byName.get("arXiv")?.configured).toBe(true);
@@ -122,8 +126,62 @@ describe("environment-driven collector config", () => {
 
   test("status output never leaks a credential value", () => {
     process.env.JOOBLE_API_KEY = "super-secret-value";
+    process.env.EXA_API_KEY = "exa-secret-value";
     const serialized = JSON.stringify(collectorStatuses());
     expect(serialized).not.toContain("super-secret-value");
+    expect(serialized).not.toContain("exa-secret-value");
     expect(serialized).toContain("JOOBLE_API_KEY"); // the variable name is shown
+  });
+});
+
+describe("open-web channels", () => {
+  const profile = {
+    major: "Computer Science",
+    targetRoles: ["Software Engineer Intern"],
+    locations: "Pune, India",
+    opportunityTypes: ["job", "internship", "scholarship"],
+  };
+
+  test("are inactive until EXA_API_KEY exists", () => {
+    const web = collectorStatuses(profile).filter((c) => c.name.startsWith("Web ·"));
+    expect(web.length).toBeGreaterThan(0);
+    for (const channel of web) {
+      expect(channel.configured).toBe(false);
+      expect(channel.requiresEnv).toEqual(["EXA_API_KEY"]);
+    }
+  });
+
+  test("follow the profile's selected opportunity types", () => {
+    process.env.EXA_API_KEY = "key";
+    const byName = new Map(
+      collectorStatuses(profile).map((c) => [c.name, c] as const),
+    );
+    expect(byName.get("Web · Jobs")?.enabled).toBe(true);
+    expect(byName.get("Web · Internships")?.enabled).toBe(true);
+    expect(byName.get("Web · Scholarships")?.enabled).toBe(true);
+    // Not selected by this profile, so the channel stays out of the run.
+    expect(byName.get("Web · Government exams")?.enabled).toBe(false);
+    // Blogs/forums need an explicit domain allow-list to be useful.
+    expect(byName.get("Web · Blogs & community")?.enabled).toBe(false);
+
+    process.env.EXA_COMMUNITY_DOMAINS = "medium.com,dev.to";
+    expect(
+      collectorStatuses(profile).find((c) => c.name === "Web · Blogs & community")
+        ?.enabled,
+    ).toBe(true);
+  });
+
+  test("without a profile nothing opt-in is reported as enabled", () => {
+    process.env.EXA_API_KEY = "key";
+    const web = collectorStatuses().filter((c) => c.name.startsWith("Web ·"));
+    for (const channel of web) expect(channel.enabled).toBe(false);
+  });
+
+  test("every registry entry exposes a runnable function and a section", () => {
+    for (const collector of COLLECTORS) {
+      expect(typeof collector.run).toBe("function");
+      expect(typeof collector.configured()).toBe("boolean");
+      expect(collector.section).toBeTruthy();
+    }
   });
 });

@@ -1,6 +1,10 @@
-// Internal Convex functions shared by the collect/tailor/apply/export/digest
-// actions. Kept in a separate module so public action modules never
-// self-reference (which would make their inferred types circular).
+// Internal Convex functions shared by the collect/tailor/apply/autopilot/
+// export/digest actions. Kept in a separate module so public action modules
+// never self-reference (which would make their inferred types circular).
+//
+// Every helper that the scheduler or autopilot can reach has a `…ForUser`
+// variant taking an explicit userId: a cron-triggered action has no auth
+// identity, so `getAuthUserId` would return null and every write would fail.
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -12,6 +16,7 @@ import {
   buildPriorApplications,
   countApplicationsSince,
 } from "./cooldown";
+import { AUTOPILOT, countAutopilotSentSince, startOfToday } from "./autopilotRules";
 import { isDueWithin, parseDeadlineValue, daysUntil } from "./deadlines";
 
 /* ------------------------------- raw jobs -------------------------------- */
@@ -60,17 +65,58 @@ async function loadUserData(ctx: QueryCtx | MutationCtx, userId: Id<"users">) {
   return { profile, jobs };
 }
 
-/** One read for the tailor flow: profile + job. */
+type ActivityRow = {
+  action: string;
+  createdAt: number;
+  organization?: string;
+  jobId?: string;
+};
+
+/** The whole audit trail, normalized for the pure cooldown/cap helpers. */
+async function loadActivity(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"users">,
+): Promise<ActivityRow[]> {
+  const rows: ActivityRow[] = [];
+  for await (const a of ctx.db
+    .query("activity")
+    .withIndex("by_user", (q) => q.eq("userId", userId))) {
+    rows.push({
+      action: a.action,
+      createdAt: a.createdAt,
+      organization: a.organization,
+      jobId: a.jobId ? String(a.jobId) : undefined,
+    });
+  }
+  return rows;
+}
+
+async function loadProfileAndJob(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"users">,
+  jobId: Id<"jobs">,
+) {
+  const { profile } = await loadUserData(ctx, userId);
+  const job = await ctx.db.get(jobId);
+  if (!job || job.userId !== userId) return { profile, job: null };
+  return { profile, job };
+}
+
+/** One read for the tailor flow: profile + job (signed-in user). */
 export const getProfileAndJob = internalQuery({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, { jobId }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { profile: null, job: null };
-    const { profile } = await loadUserData(ctx, userId);
-    const job = await ctx.db.get(jobId);
-    if (!job || job.userId !== userId) return { profile, job: null };
-    return { profile, job };
+    return await loadProfileAndJob(ctx, userId, jobId);
   },
+});
+
+/** Same read, for a scheduled or autopilot run with no auth identity. */
+export const getProfileAndJobForUser = internalQuery({
+  args: { userId: v.id("users"), jobId: v.id("jobs") },
+  handler: async (ctx, { userId, jobId }) =>
+    await loadProfileAndJob(ctx, userId, jobId),
 });
 
 /** Profile + every job for the signed-in user (Excel export, digests). */
@@ -95,7 +141,52 @@ export const listProfiles = internalQuery({
   handler: async (ctx) => await ctx.db.query("profiles").collect(),
 });
 
+/** One profile by id — the autopilot context for a scheduled run. */
+export const getProfileForUser = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) =>
+    await ctx.db
+      .query("profiles")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique(),
+});
+
 /* ------------------------------- tailoring ------------------------------- */
+
+async function applyTailored(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  args: {
+    jobId: Id<"jobs">;
+    resumeHtml: string;
+    resumeData: unknown;
+    coverLetterHtml: string;
+    resumeVersion: number;
+    validationOk: boolean;
+    validationNotes: string;
+  },
+) {
+  const job = await ctx.db.get(args.jobId);
+  if (!job || job.userId !== userId) throw new Error("Job not found.");
+  await ctx.db.patch(args.jobId, {
+    resumeHtml: args.resumeHtml,
+    resumeData: args.resumeData,
+    coverLetterHtml: args.coverLetterHtml,
+    resumeVersion: args.resumeVersion,
+    validationOk: args.validationOk,
+    validationNotes: args.validationNotes || undefined,
+    status: "Resume Ready",
+  });
+  await ctx.db.insert("activity", {
+    userId,
+    jobId: args.jobId,
+    action: args.validationOk
+      ? `tailored (v${args.resumeVersion}, validated)`
+      : `tailored (v${args.resumeVersion}, flagged)`,
+    detail: job.title,
+    createdAt: Date.now(),
+  });
+}
 
 export const saveTailored = internalMutation({
   args: {
@@ -110,30 +201,63 @@ export const saveTailored = internalMutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in required.");
-    const job = await ctx.db.get(args.jobId);
-    if (!job || job.userId !== userId) throw new Error("Job not found.");
-    await ctx.db.patch(args.jobId, {
-      resumeHtml: args.resumeHtml,
-      resumeData: args.resumeData,
-      coverLetterHtml: args.coverLetterHtml,
-      resumeVersion: args.resumeVersion,
-      validationOk: args.validationOk,
-      validationNotes: args.validationNotes || undefined,
-      status: "Resume Ready",
-    });
-    await ctx.db.insert("activity", {
-      userId,
-      jobId: args.jobId,
-      action: args.validationOk
-        ? `tailored (v${args.resumeVersion}, validated)`
-        : `tailored (v${args.resumeVersion}, flagged)`,
-      detail: job.title,
-      createdAt: Date.now(),
-    });
+    await applyTailored(ctx, userId, args);
+  },
+});
+
+export const saveTailoredForUser = internalMutation({
+  args: {
+    userId: v.id("users"),
+    jobId: v.id("jobs"),
+    resumeHtml: v.string(),
+    resumeData: v.any(),
+    coverLetterHtml: v.string(),
+    resumeVersion: v.number(),
+    validationOk: v.boolean(),
+    validationNotes: v.string(),
+  },
+  handler: async (ctx, { userId, ...args }) => {
+    await applyTailored(ctx, userId, args);
   },
 });
 
 /* --------------------------------- apply --------------------------------- */
+
+interface ApplyContext {
+  profile: Awaited<ReturnType<typeof loadUserData>>["profile"];
+  job: Awaited<ReturnType<typeof loadUserData>>["jobs"][number];
+  sentToday: number;
+  autoSentToday: number;
+  prior: ReturnType<typeof buildPriorApplications>;
+}
+
+async function loadApplyContext(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"users">,
+  jobId: Id<"jobs">,
+): Promise<ApplyContext> {
+  const { profile, jobs } = await loadUserData(ctx, userId);
+  const job = jobs.find((j) => j._id === jobId);
+  if (!job) throw new Error("Job not found.");
+
+  const today = startOfToday(Date.now());
+  const orgByJob = new Map(jobs.map((j) => [String(j._id), j.organization]));
+  const activity = await loadActivity(ctx, userId);
+
+  // The audit trail is the single source of truth for both the daily cap and
+  // the company cooldown, so applies recorded by hand — and applies autopilot
+  // sent — count exactly like ones you approved yourself.
+  return {
+    profile,
+    job,
+    sentToday: countApplicationsSince(activity, today),
+    autoSentToday: countAutopilotSentSince(activity, today),
+    prior: buildPriorApplications({
+      activity,
+      organizationByJobId: orgByJob,
+    }),
+  };
+}
 
 /**
  * One read for the apply flow: profile, job, applications sent today, and the
@@ -144,62 +268,115 @@ export const getApplyContext = internalQuery({
   handler: async (ctx, { jobId }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in required.");
-    const { profile, jobs } = await loadUserData(ctx, userId);
-    const job = jobs.find((j) => j._id === jobId);
-    if (!job) throw new Error("Job not found.");
-
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const orgByJob = new Map(jobs.map((j) => [String(j._id), j.organization]));
-
-    // The audit trail is the single source of truth for both the daily cap and
-    // the company cooldown, so applies recorded by hand count exactly like
-    // ones this app sent.
-    const activity: {
-      action: string;
-      createdAt: number;
-      organization?: string;
-      jobId?: string;
-    }[] = [];
-    for await (const a of ctx.db
-      .query("activity")
-      .withIndex("by_user", (q) => q.eq("userId", userId))) {
-      activity.push({
-        action: a.action,
-        createdAt: a.createdAt,
-        organization: a.organization,
-        jobId: a.jobId ? String(a.jobId) : undefined,
-      });
-    }
-    const sentToday = countApplicationsSince(activity, startOfDay.getTime());
-    const prior = buildPriorApplications({
-      activity,
-      organizationByJobId: orgByJob,
-    });
-    return { profile, job, sentToday, prior };
+    return await loadApplyContext(ctx, userId, jobId);
   },
 });
 
+export const getApplyContextForUser = internalQuery({
+  args: { userId: v.id("users"), jobId: v.id("jobs") },
+  handler: async (ctx, { userId, jobId }) =>
+    await loadApplyContext(ctx, userId, jobId),
+});
+
+async function markAppliedFor(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  jobId: Id<"jobs">,
+  trigger: string,
+) {
+  const job = await ctx.db.get(jobId);
+  if (!job || job.userId !== userId) throw new Error("Job not found.");
+  if (job.status !== "Approved") {
+    throw new Error("Blocked: status changed after approval.");
+  }
+  const now = Date.now();
+  const autopilot = trigger === "autopilot";
+  await ctx.db.patch(jobId, {
+    status: "Applied",
+    appliedAt: now,
+    ...(autopilot ? { autoApplied: true, autoAppliedAt: now } : {}),
+  });
+  await ctx.db.insert("activity", {
+    userId,
+    jobId,
+    action: autopilot ? AUTOPILOT.ACTION : "applied (email)",
+    detail: job.title,
+    organization: job.organization,
+    createdAt: now,
+  });
+}
+
 export const markApplied = internalMutation({
-  args: { jobId: v.id("jobs") },
-  handler: async (ctx, { jobId }) => {
+  args: { jobId: v.id("jobs"), trigger: v.optional(v.string()) },
+  handler: async (ctx, { jobId, trigger }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in required.");
+    await markAppliedFor(ctx, userId, jobId, trigger ?? "manual");
+  },
+});
+
+export const markAppliedForUser = internalMutation({
+  args: {
+    userId: v.id("users"),
+    jobId: v.id("jobs"),
+    trigger: v.optional(v.string()),
+  },
+  handler: async (ctx, { userId, jobId, trigger }) => {
+    await markAppliedFor(ctx, userId, jobId, trigger ?? "manual");
+  },
+});
+
+/**
+ * Autopilot's stand-in for the human Approve click. It exists so the audit
+ * trail says plainly that a machine — not you — approved this one.
+ */
+export const approveForAutopilot = internalMutation({
+  args: { userId: v.id("users"), jobId: v.id("jobs") },
+  handler: async (ctx, { userId, jobId }) => {
     const job = await ctx.db.get(jobId);
     if (!job || job.userId !== userId) throw new Error("Job not found.");
-    if (job.status !== "Approved") {
-      throw new Error("Blocked: status changed after approval.");
+    if (job.status !== "Resume Ready") {
+      throw new Error(`Autopilot can only approve a tailored resume, not "${job.status}".`);
     }
-    const now = Date.now();
-    await ctx.db.patch(jobId, { status: "Applied", appliedAt: now });
+    await ctx.db.patch(jobId, { status: "Approved", approvedAt: Date.now() });
     await ctx.db.insert("activity", {
       userId,
       jobId,
-      action: "applied (email)",
+      action: AUTOPILOT.APPROVAL_ACTION,
       detail: job.title,
       organization: job.organization,
-      createdAt: now,
+      createdAt: Date.now(),
     });
+  },
+});
+
+/** Autopilot context for one user: profile, jobs and the application history. */
+export const getAutopilotContext = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) => {
+    const { profile, jobs } = await loadUserData(ctx, userId);
+    if (!profile) return null;
+    const today = startOfToday(Date.now());
+    const activity = await loadActivity(ctx, userId);
+    return {
+      profile,
+      jobs: jobs.map((j) => ({
+        jobId: String(j._id),
+        title: j.title,
+        organization: j.organization,
+        status: j.status,
+        matchScore: j.matchScore,
+        opportunityType: j.opportunityType,
+        applyMode: j.applyMode,
+        applyEmail: j.applyEmail,
+      })),
+      sentToday: countApplicationsSince(activity, today),
+      autoSentToday: countAutopilotSentSince(activity, today),
+      prior: buildPriorApplications({
+        activity,
+        organizationByJobId: new Map(jobs.map((j) => [String(j._id), j.organization])),
+      }),
+    };
   },
 });
 
@@ -343,6 +520,7 @@ export const logActivity = internalMutation({
     jobId: v.optional(v.id("jobs")),
     action: v.string(),
     detail: v.optional(v.string()),
+    organization: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await ctx.db.insert("activity", {
@@ -350,6 +528,7 @@ export const logActivity = internalMutation({
       jobId: args.jobId,
       action: args.action,
       detail: args.detail,
+      organization: args.organization,
       createdAt: Date.now(),
     });
   },

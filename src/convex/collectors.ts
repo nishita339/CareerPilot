@@ -1,69 +1,38 @@
 // Production collectors. Rules honored here:
-//  - official/documented public APIs and public job boards only
+//  - official/documented public APIs, public job boards and a public search
+//    index — never a login wall, never a browser-automation trick
 //  - credentials read from environment variables, never hardcoded
-//  - no login walls, no anti-detection tooling, no proxy rotation
+//  - no anti-detection tooling and no proxy rotation of any kind
 //  - every collector is isolated; one failure must not stop the run
 //  - results per source are capped so volume stays low and polite
 
-export interface RawJob {
-  title: string;
-  organization: string;
-  location?: string;
-  remoteOk: boolean;
-  url: string;
-  externalId?: string;
-  description?: string;
-  applyEmail?: string;
-  deadline?: string;
-  opportunityType: "job" | "internship" | "research" | "fellowship";
-  source: string;
-  publishedAt?: number;
-}
+import {
+  MAX_PER_SOURCE,
+  USER_AGENT,
+  classifyOpportunity,
+  envList,
+  envValue,
+  stripHtml,
+  type OpportunityType,
+  type RawJob,
+} from "./opportunities";
+import {
+  SEARCH_CHANNELS,
+  channelKeysFor,
+  collectChannel,
+  exaConfigured,
+  type SearchProfile,
+} from "./websearch";
 
-export type OpportunityType = RawJob["opportunityType"];
+// Re-exported so every existing consumer keeps one import site.
+export { classifyOpportunity, envList, envValue } from "./opportunities";
+export type { OpportunityType, RawJob } from "./opportunities";
 
-const USER_AGENT = "CareerPilot/1.0 (student job search; respects robots.txt)";
-const MAX_PER_SOURCE = 20;
-
-export function envValue(name: string): string | undefined {
-  const raw = process.env[name];
-  if (!raw) return undefined;
-  const trimmed = raw.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-export function envList(name: string): string[] {
-  return (envValue(name) ?? "")
-    .split(/[,\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function stripHtml(input: string): string {
-  return input
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/** Heuristic classification from title + description text. */
-export function classifyOpportunity(
-  title: string,
-  description = "",
-  sourceHint?: OpportunityType,
-): OpportunityType {
-  const text = `${title} ${description}`.toLowerCase();
-  if (/\b(phd|postdoc|research assistant|research intern|research scientist)\b/.test(text))
-    return "research";
-  if (/\b(intern|internship|placement|working student)\b/.test(text)) return "internship";
-  if (/\b(fellow|fellowship|scholar program)\b/.test(text)) return "fellowship";
-  return sourceHint ?? "job";
+/** Everything a collector may use to decide what to look for. */
+export interface CollectorRunContext {
+  searchTerms: string[];
+  location: string;
+  profile: SearchProfile;
 }
 
 async function fetchJson<T>(
@@ -551,6 +520,53 @@ export function collectDemoBoard(): RawJob[] {
       applyEmail: "jobs@cobalt-demo.example",
       opportunityType: "job",
     },
+    {
+      source: "DEMO-Scholarship",
+      externalId: "sc-1",
+      title: "Merit Scholarship for Undergraduate STEM Students",
+      organization: "Helios Foundation (demo)",
+      location: "Remote / international",
+      remoteOk: true,
+      url: "https://example.com/scholarships/merit-stem",
+      description:
+        "Merit scholarship covering tuition and a monthly stipend for undergraduate STEM " +
+        "students. Eligibility: enrolled in a Computer Science or engineering program, GPA 3.5+, " +
+        "demonstrated project work. Requires one reference letter and a statement of purpose. " +
+        "Deadline 2026-11-30. Submit the application form on the foundation portal.",
+      deadline: "2026-11-30",
+      opportunityType: "scholarship",
+    },
+    {
+      source: "DEMO-Exams",
+      externalId: "ex-1",
+      title: "Graduate Level Engineering Services Examination — Notification",
+      organization: "Public Service Commission (demo)",
+      location: "Nationwide",
+      remoteOk: false,
+      url: "https://example.com/exams/engineering-services",
+      description:
+        "Government recruitment notification for graduate engineers. Eligibility: bachelor's " +
+        "degree in engineering or computer science, age 21-30. Selection: preliminary exam, " +
+        "mains exam, interview. Online application closes 2027-01-20. Read the official " +
+        "notification and check the syllabus and cutoff before applying.",
+      deadline: "2027-01-20",
+      opportunityType: "govt-exam",
+    },
+    {
+      source: "DEMO-Fellowship",
+      externalId: "fe-1",
+      title: "Open Source Fellowship — Data Tooling",
+      organization: "Commons Collective (demo)",
+      location: "Remote",
+      remoteOk: true,
+      url: "https://example.com/fellowship/open-source",
+      description:
+        "Six-month fellowship for students who want to work on open source data tooling. " +
+        "Skills: Python, Git, testing, documentation, SQL. Stipend provided. " +
+        "Apply with a short project proposal and links to your repositories.",
+      applyEmail: "fellowship@commons-demo.example",
+      opportunityType: "fellowship",
+    },
   ];
 }
 
@@ -558,74 +574,128 @@ export function collectDemoBoard(): RawJob[] {
 
 export interface CollectorSpec {
   name: string;
-  /** Config key the user must add to the deployment environment, if any. */
+  /** Config keys the user must add to the deployment environment, if any. */
   requiresEnv: string[];
+  /** Usable with the deployment's current environment. */
   configured: () => boolean;
-  run: (searchTerms: string[], location: string) => Promise<RawJob[]>;
+  /** Extra per-profile gate (e.g. the profile opted into scholarships). */
+  enabledFor?: (profile: SearchProfile) => boolean;
+  /** Section this source fills, for the UI strip. */
+  section?: string;
+  run: (ctx: CollectorRunContext) => Promise<RawJob[]>;
 }
 
-export const COLLECTORS: CollectorSpec[] = [
+const BOARD_COLLECTORS: CollectorSpec[] = [
   {
     name: "RemoteOK",
     requiresEnv: [],
     configured: () => true,
+    section: "Jobs",
     run: () => collectRemoteOK(),
   },
   {
     name: "Remotive",
     requiresEnv: [],
     configured: () => true,
-    run: (terms) => collectRemotive(terms[0] ?? "software"),
+    section: "Jobs",
+    run: (ctx) => collectRemotive(ctx.searchTerms[0] ?? "software"),
   },
   {
     name: "Adzuna",
     requiresEnv: ["ADZUNA_APP_ID", "ADZUNA_APP_KEY"],
     configured: adzunaConfigured,
-    run: (terms, location) =>
-      collectAdzuna(terms[0] ?? "software engineer", location || "us"),
+    section: "Jobs",
+    run: (ctx) =>
+      collectAdzuna(
+        ctx.searchTerms[0] ?? "software engineer",
+        envValue("ADZUNA_COUNTRY") ?? "us",
+      ),
   },
   {
     name: "Jooble",
     requiresEnv: ["JOOBLE_API_KEY"],
     configured: joobleConfigured,
-    run: (terms, location) => collectJooble(terms[0] ?? "software engineer", location),
+    section: "Jobs",
+    run: (ctx) =>
+      collectJooble(ctx.searchTerms[0] ?? "software engineer", ctx.location),
   },
   {
     name: "Greenhouse",
     requiresEnv: ["GREENHOUSE_BOARD_TOKENS"],
     configured: greenhouseConfigured,
+    section: "Jobs",
     run: () => collectGreenhouse(),
   },
   {
     name: "Lever",
     requiresEnv: ["LEVER_BOARD_TOKENS"],
     configured: leverConfigured,
+    section: "Jobs",
     run: () => collectLever(),
   },
   {
     name: "arXiv",
     requiresEnv: [],
     configured: () => true,
-    run: (terms) => collectArxiv(terms[0] ?? "machine learning"),
+    section: "Research",
+    run: (ctx) => collectArxiv(ctx.searchTerms[0] ?? "machine learning"),
   },
   {
     name: "SemanticScholar",
     requiresEnv: [],
     configured: semanticScholarConfigured,
-    run: (terms) => collectSemanticScholar(terms[0] ?? "machine learning"),
+    section: "Research",
+    run: (ctx) => collectSemanticScholar(ctx.searchTerms[0] ?? "machine learning"),
   },
 ];
+
+/**
+ * One registry entry per open-web channel, so the dashboard strip shows which
+ * sections (scholarships, government exams, blogs) actually produced data and
+ * which one is waiting on EXA_API_KEY.
+ */
+const WEB_COLLECTORS: CollectorSpec[] = SEARCH_CHANNELS.map((channel) => ({
+  name: `Web · ${channel.label}`,
+  requiresEnv: ["EXA_API_KEY"],
+  configured: exaConfigured,
+  section: channel.label,
+  enabledFor: (profile) =>
+    channel.key === "community"
+      ? // Blogs and forums are opt-in: they only add value with a domain list.
+        envList("EXA_COMMUNITY_DOMAINS").length > 0
+      : channelKeysFor(profile).includes(channel.key),
+  run: (ctx) => collectChannel(channel.key, ctx.profile),
+}));
+
+export const COLLECTORS: CollectorSpec[] = [...BOARD_COLLECTORS, ...WEB_COLLECTORS];
 
 export interface CollectorStatus {
   name: string;
   configured: boolean;
   requiresEnv: string[];
+  section?: string;
+  /** Enabled for this profile (opt-in sections can be off). */
+  enabled: boolean;
 }
 
-export function collectorStatuses(): CollectorStatus[] {
+/** Status for the dashboard strip. Names and variable names only, never values. */
+export function collectorStatuses(profile?: SearchProfile): CollectorStatus[] {
   return COLLECTORS.map((c) => ({
     name: c.name,
     configured: c.configured(),
     requiresEnv: c.requiresEnv,
+    section: c.section,
+    // Without a profile we cannot know whether an opt-in section applies, so
+    // report it as not enabled rather than guessing.
+    enabled: c.enabledFor ? (profile ? c.enabledFor(profile) : false) : true,
   }));
+}
+
+/** True when this collector should run for the given profile right now. */
+export function collectorEnabled(
+  spec: CollectorSpec,
+  profile: SearchProfile,
+): boolean {
+  if (!spec.configured()) return false;
+  return spec.enabledFor ? spec.enabledFor(profile) : true;
 }
