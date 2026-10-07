@@ -218,14 +218,35 @@ export const attachResumeFile = mutation({
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .unique();
     if (!profile) {
-      throw new Error("Save the first onboarding step before uploading a resume.");
+      const user = await ctx.db.get(userId);
+      await ctx.db.insert("profiles", {
+        userId,
+        fullName: user?.name || "Candidate",
+        headline: "Candidate",
+        email: user?.email || "",
+        phone: "",
+        location: "",
+        major: "",
+        university: "",
+        graduationYear: "",
+        targetRoles: [],
+        opportunityTypes: ["job", "internship"],
+        openToRemote: true,
+        minMatchScore: 70,
+        maxApplicationsPerDay: 10,
+        resumeFileId: storageId,
+        resumeFileName: fileName,
+        ...(extractedText ? { masterResumeText: extractedText } : {}),
+        updatedAt: Date.now(),
+      });
+    } else {
+      await ctx.db.patch(profile._id, {
+        resumeFileId: storageId,
+        resumeFileName: fileName,
+        ...(extractedText ? { masterResumeText: extractedText } : {}),
+        updatedAt: Date.now(),
+      });
     }
-    await ctx.db.patch(profile._id, {
-      resumeFileId: storageId,
-      resumeFileName: fileName,
-      ...(extractedText ? { masterResumeText: extractedText } : {}),
-      updatedAt: Date.now(),
-    });
     await ctx.db.insert("activity", {
       userId,
       action: "uploaded resume",

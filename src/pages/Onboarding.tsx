@@ -194,6 +194,43 @@ export default function Onboarding() {
   }
   if (!isAuthenticated) return <Navigate to="/auth?returnTo=%2Fonboarding" replace />;
 
+  const saveCurrentStep = async () => {
+    try {
+      await save({
+        fullName: form.fullName || "Candidate",
+        headline: form.headline || "Candidate",
+        email: form.email || "",
+        phone: form.phone || "",
+        location: form.location || "",
+        links: form.links || undefined,
+        major: form.major || "",
+        university: form.university || "",
+        graduationYear: form.graduationYear || "",
+        gpa: form.gpa || undefined,
+        relevantCoursework: form.relevantCoursework || undefined,
+        country: form.country || undefined,
+        skills: (form.skills ?? "").split(/[,;\n]/).map((s) => s.trim()).filter(Boolean),
+        experience: form.experience || undefined,
+        projects: form.projects || undefined,
+        certifications: form.certifications || undefined,
+        masterResumeText: form.masterResumeText || undefined,
+        targetRoles: (form.targetRoles ?? "").split(/[,;\n]/).map((s) => s.trim()).filter(Boolean),
+        opportunityTypes: types,
+        locations: form.locations || undefined,
+        openToRemote: openRemote,
+        minMatchScore: minScore,
+        maxApplicationsPerDay: dailyCap,
+        blacklistCompanies: form.blacklistCompanies || undefined,
+        demoMode,
+        autoApplyEnabled: autoApply,
+        autoApplyMinScore: autoScore,
+        autoApplyDailyLimit: autoLimit,
+      });
+    } catch {
+      // Best-effort auto-save
+    }
+  };
+
   const readFile = (file: File) => {
     if (file.size > 3_000_000) {
       toast.error("That file is larger than 3 MB — paste the resume text instead.");
@@ -206,6 +243,7 @@ export default function Onboarding() {
       setUploading(true);
       setExtract(null);
       try {
+        await saveCurrentStep();
         const r = await upload({ fileName: file.name, base64 });
         setExtract({ message: r.message, ok: r.looksUseful });
         if (r.looksUseful) {
@@ -653,7 +691,10 @@ export default function Onboarding() {
               <Button
                 className="rounded-none"
                 disabled={blockedBy.length > 0}
-                onClick={() => setStep((s) => s + 1)}
+                onClick={() => {
+                  saveCurrentStep();
+                  setStep((s) => s + 1);
+                }}
               >
                 Continue
                 <ArrowRight className="size-4" />
