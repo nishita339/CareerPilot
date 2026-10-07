@@ -2,3 +2,6 @@
 node_modules
 dist
 src/convex/_generated
+__pycache__/
+*.pyc
+.pytest_cache/

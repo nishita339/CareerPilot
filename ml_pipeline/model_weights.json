@@ -1,0 +1,22 @@
+{
+  "model": "LogisticRegression",
+  "features": [
+    "Cosine Similarity (TF-IDF)",
+    "Jaccard Similarity (Vocabulary)",
+    "Job Keyword Density",
+    "STAR Action Verb Ratio"
+  ],
+  "weights": [
+    3.1787380580555817,
+    2.029123017384479,
+    3.7848701277146963,
+    2.602862931552181
+  ],
+  "bias": -2.997408352662162,
+  "metrics": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1_score": 1.0
+  }
+}
