@@ -406,36 +406,44 @@ export async function collectSemanticScholar(topic: string): Promise<RawJob[]> {
   const key = envValue("SEMANTIC_SCHOLAR_API_KEY");
   const query = topic.trim() || "machine learning";
   const fields = "title,abstract,url,year,authors,externalIds,openAccessPdf";
-  const data = await fetchJson<{
-    data?: Array<{
-      paperId: string;
-      title: string;
-      abstract?: string;
-      url?: string;
-      year?: number;
-      authors?: Array<{ name: string }>;
-    }>;
-  }>(
-    `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(
-      query,
-    )}&limit=${MAX_PER_SOURCE}&fields=${fields}`,
-    key ? { headers: { "x-api-key": key } } : {},
-  );
+  try {
+    const data = await fetchJson<{
+      data?: Array<{
+        paperId: string;
+        title: string;
+        abstract?: string;
+        url?: string;
+        year?: number;
+        authors?: Array<{ name: string }>;
+      }>;
+    }>(
+      `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(
+        query,
+      )}&limit=${MAX_PER_SOURCE}&fields=${fields}`,
+      key ? { headers: { "x-api-key": key } } : {},
+    );
 
-  return (data.data ?? []).slice(0, MAX_PER_SOURCE).map((p) => ({
-    source: "SemanticScholar",
-    externalId: p.paperId,
-    title: p.title.slice(0, 200),
-    organization:
-      (p.authors ?? []).slice(0, 3).map((a) => a.name).join(", ") ||
-      "Semantic Scholar",
-    location: "Remote / on-site",
-    remoteOk: false,
-    url: p.url ?? `https://www.semanticscholar.org/paper/${p.paperId}`,
-    description: (p.abstract ?? "").slice(0, 3000),
-    opportunityType: "research" as const,
-    publishedAt: undefined,
-  }));
+    return (data.data ?? []).slice(0, MAX_PER_SOURCE).map((p) => ({
+      source: "SemanticScholar",
+      externalId: p.paperId,
+      title: p.title.slice(0, 200),
+      organization:
+        (p.authors ?? []).slice(0, 3).map((a) => a.name).join(", ") ||
+        "Semantic Scholar",
+      location: "Remote / on-site",
+      remoteOk: false,
+      url: p.url ?? `https://www.semanticscholar.org/paper/${p.paperId}`,
+      description: (p.abstract ?? "").slice(0, 3000),
+      opportunityType: "research" as const,
+      publishedAt: undefined,
+    }));
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("429")) {
+      console.warn("[SemanticScholar] Rate limit reached (HTTP 429) on public tier; skipping research paper feed.");
+      return [];
+    }
+    throw err;
+  }
 }
 
 /* ------------------------------- Demo board ----------------------------- */
