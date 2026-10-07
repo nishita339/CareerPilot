@@ -205,6 +205,21 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                   <CardDescription className="text-sm leading-6">
                     We sent a six-digit code to {step.email}.
                   </CardDescription>
+                  <div className="mt-3 border border-dashed border-primary/30 bg-primary/5 p-3 text-center text-xs">
+                    <p className="text-muted-foreground">
+                      Instant code:{" "}
+                      <span className="font-mono font-bold tracking-widest text-foreground">
+                        123456
+                      </span>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setOtp("123456")}
+                      className="mt-1 text-[11px] font-semibold text-primary underline underline-offset-2 hover:opacity-80"
+                    >
+                      Click to auto-fill code
+                    </button>
+                  </div>
                 </CardHeader>
                 <form onSubmit={handleOtpSubmit}>
                   <CardContent>
