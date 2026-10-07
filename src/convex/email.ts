@@ -10,16 +10,24 @@ export const sendOtpEmail = internalAction({
     token: v.string(),
   },
   handler: async (_ctx, { email, token }) => {
+    const gmailUser = process.env.GMAIL_USER;
+    const gmailPass = process.env.GMAIL_APP_PASSWORD;
+
+    if (!gmailUser || !gmailPass) {
+      console.error("[CareerPilot] Missing GMAIL_USER or GMAIL_APP_PASSWORD in environment.");
+      return;
+    }
+
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
-        user: "nishita.singh539@gmail.com",
-        pass: "tcqtjncenljzcylr",
+        user: gmailUser,
+        pass: gmailPass,
       },
     });
 
     await transporter.sendMail({
-      from: '"CareerPilot" <nishita.singh539@gmail.com>',
+      from: `"CareerPilot" <${gmailUser}>`,
       to: email,
       subject: "CareerPilot — Your Verification Code",
       text: `Your CareerPilot verification code is: ${token}`,
