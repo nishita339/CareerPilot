@@ -24,13 +24,16 @@ import { toast } from "sonner";
 import {
   Activity,
   Bot,
+  Brain,
   Check,
   ClipboardList,
   Copy,
   Download,
   FileDown,
   FileText,
+  Globe,
   Inbox,
+  Laptop,
   Lightbulb,
   Link2,
   Loader2,
@@ -43,6 +46,8 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Sparkles,
+  TrendingUp,
   TriangleAlert,
   UserRoundCog,
   X,
@@ -150,6 +155,8 @@ export default function Dashboard() {
 
   const [section, setSection] = useState<string>("all");
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("All");
+  const [regionFilter, setRegionFilter] = useState<"all" | "india" | "foreign">("all");
+  const [modeFilter, setModeFilter] = useState<"all" | "remote" | "onsite">("all");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<Id<"jobs"> | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -180,13 +187,30 @@ export default function Dashboard() {
     return list
       .filter((j) => sectionTypes.includes(j.opportunityType as never))
       .filter((j) => (filter === "All" ? true : j.status === filter))
+      .filter((j) => {
+        if (modeFilter === "remote") return j.remoteOk === true || (j.location?.toLowerCase().includes("remote") ?? false);
+        if (modeFilter === "onsite") return !j.remoteOk && !(j.location?.toLowerCase().includes("remote") ?? false);
+        return true;
+      })
+      .filter((j) => {
+        if (regionFilter === "india") {
+          const loc = (j.location ?? "").toLowerCase();
+          return loc.includes("india") || loc.includes("delhi") || loc.includes("bangalore") || loc.includes("bengaluru") || loc.includes("mumbai") || loc.includes("hyderabad") || loc.includes("pune");
+        }
+        if (regionFilter === "foreign") {
+          const loc = (j.location ?? "").toLowerCase();
+          const isIndia = loc.includes("india") || loc.includes("delhi") || loc.includes("bangalore") || loc.includes("bengaluru") || loc.includes("mumbai") || loc.includes("hyderabad") || loc.includes("pune");
+          return !isIndia;
+        }
+        return true;
+      })
       .filter((j) =>
         q
           ? `${j.title} ${j.organization} ${j.location ?? ""}`.toLowerCase().includes(q)
           : true,
       )
       .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
-  }, [jobs, filter, search, sectionTypes]);
+  }, [jobs, filter, search, sectionTypes, regionFilter, modeFilter]);
 
   const selected = useMemo(
     () => filtered.find((j) => j._id === selectedId) ?? filtered[0] ?? null,
@@ -478,6 +502,75 @@ export default function Dashboard() {
                 {f}
               </button>
             ))}
+          </div>
+
+          {/* Region and Work Mode Filters */}
+          <div className="flex flex-wrap items-center gap-1.5 border-l border-border pl-3">
+            <span className="text-[11px] font-medium text-muted-foreground mr-1">Region:</span>
+            <button
+              onClick={() => setRegionFilter("all")}
+              className={`rounded-none border px-2 py-0.5 text-xs transition-colors ${
+                regionFilter === "all"
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              }`}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setRegionFilter("india")}
+              className={`rounded-none border px-2 py-0.5 text-xs transition-colors ${
+                regionFilter === "india"
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              }`}
+            >
+              🇮🇳 India
+            </button>
+            <button
+              onClick={() => setRegionFilter("foreign")}
+              className={`rounded-none border px-2 py-0.5 text-xs transition-colors ${
+                regionFilter === "foreign"
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              }`}
+            >
+              🌍 Foreign / Global
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 border-l border-border pl-3">
+            <span className="text-[11px] font-medium text-muted-foreground mr-1">Mode:</span>
+            <button
+              onClick={() => setModeFilter("all")}
+              className={`rounded-none border px-2 py-0.5 text-xs transition-colors ${
+                modeFilter === "all"
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              }`}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setModeFilter("remote")}
+              className={`rounded-none border px-2 py-0.5 text-xs transition-colors ${
+                modeFilter === "remote"
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              }`}
+            >
+              🏠 Remote
+            </button>
+            <button
+              onClick={() => setModeFilter("onsite")}
+              className={`rounded-none border px-2 py-0.5 text-xs transition-colors ${
+                modeFilter === "onsite"
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              }`}
+            >
+              🏢 Onsite / Hybrid
+            </button>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <Button
@@ -789,6 +882,8 @@ function JobDetail({
   const [notes, setNotes] = useState(job.notes ?? "");
   const [busy, setBusy] = useState<string | null>(null);
   const [showResume, setShowResume] = useState(true);
+  const [showMlDetails, setShowMlDetails] = useState(false);
+  const mlAnalysis = useQuery(api.mlResumeAnalyzer.analyzeOpportunityResume, { jobId: job._id });
 
   const run = async (key: string, fn: () => Promise<unknown>, done?: string) => {
     setBusy(key);
@@ -888,6 +983,159 @@ function JobDetail({
           </div>
         )}
       </div>
+
+      {/* AI/ML Resume ATS Optimizer & Suggestions */}
+      {mlAnalysis && (
+        <div className="border-b border-border bg-accent/20 px-5 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Brain className="size-4 text-primary" />
+              <p className="micro-label font-semibold text-foreground">AI/ML Resume ATS Optimizer</p>
+            </div>
+            <button
+              onClick={() => setShowMlDetails(!showMlDetails)}
+              className="text-xs text-primary underline underline-offset-2 hover:opacity-80"
+            >
+              {showMlDetails ? "Hide ML Metrics" : "Inspect ML Vector Metrics"}
+            </button>
+          </div>
+
+          {/* ATS Score & Probability comparison */}
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <div className="border border-border bg-card p-3">
+              <span className="text-[11px] text-muted-foreground">Current ATS Match</span>
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className="text-xl font-bold">{mlAnalysis.currentAtsScore}</span>
+                <span className="text-xs text-muted-foreground">/100</span>
+              </div>
+              <div className="mt-2 h-1.5 w-full bg-muted">
+                <div
+                  className="h-full bg-amber-500"
+                  style={{ width: `${mlAnalysis.currentAtsScore}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="border border-primary/30 bg-primary/5 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-primary">Potential Score</span>
+                <Sparkles className="size-3 text-primary" />
+              </div>
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className="text-xl font-bold text-primary">{mlAnalysis.potentialAtsScore}</span>
+                <span className="text-xs text-muted-foreground">/100</span>
+              </div>
+              <div className="mt-2 h-1.5 w-full bg-muted">
+                <div
+                  className="h-full bg-primary"
+                  style={{ width: `${mlAnalysis.potentialAtsScore}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="border border-border bg-card p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-muted-foreground">Callback Probability</span>
+                <TrendingUp className="size-3 text-emerald-500" />
+              </div>
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className="text-xl font-bold text-emerald-600 dark:text-emerald-400">
+                  {mlAnalysis.selectionProbability}%
+                </span>
+                <span className="text-[11px] text-muted-foreground">(est. interview chance)</span>
+              </div>
+              <div className="mt-2 h-1.5 w-full bg-muted">
+                <div
+                  className="h-full bg-emerald-500"
+                  style={{ width: `${mlAnalysis.selectionProbability}%` }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Inspectable AI/ML Vector Space details */}
+          {showMlDetails && (
+            <div className="mt-3 border border-border bg-background p-3.5 text-xs">
+              <p className="font-semibold text-foreground">NLP & Vector Space Architecture:</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div>
+                  <span className="text-muted-foreground">Cosine Similarity (TF-IDF):</span>{" "}
+                  <span className="font-mono font-medium">{mlAnalysis.cosineSimilarity}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Jaccard Vocabulary Overlap:</span>{" "}
+                  <span className="font-mono font-medium">{mlAnalysis.jaccardSimilarity}</span>
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Model: Sigmoid Logit Estimator: P(interview) = 1 / (1 + e^(-z)) where z weights keyword similarity, skill density, and domain terminology.
+              </p>
+
+              {/* Extracted Key Terms */}
+              <div className="mt-3">
+                <span className="text-[11px] font-medium text-foreground">Top Extracted Keywords (Job vs Resume):</span>
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {mlAnalysis.keyTermsExtracted.slice(0, 10).map((t) => (
+                    <span
+                      key={t.term}
+                      className={`inline-flex items-center gap-1 rounded-none border px-1.5 py-0.5 text-[10px] ${
+                        t.inResume
+                          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                          : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                      }`}
+                    >
+                      {t.inResume ? <Check className="size-2.5" /> : <Plus className="size-2.5" />}
+                      {t.term}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Actionable Suggestions */}
+          <div className="mt-4 space-y-2.5">
+            <p className="text-xs font-semibold text-foreground">
+              Recommended Resume Changes to Boost Selection:
+            </p>
+            {mlAnalysis.suggestions.map((s, idx) => (
+              <div key={idx} className="border border-border bg-card p-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Badge
+                      variant="outline"
+                      className={`rounded-none text-[10px] uppercase ${
+                        s.priority === "High"
+                          ? "border-destructive/40 text-destructive"
+                          : "border-primary/40 text-primary"
+                      }`}
+                    >
+                      {s.priority} Priority
+                    </Badge>
+                    <span className="font-medium text-foreground">{s.category}</span>
+                  </div>
+                </div>
+                <p className="mt-1.5 text-muted-foreground">{s.issue}</p>
+                <p className="mt-1 font-medium text-foreground">{s.recommendation}</p>
+                {s.exampleRewrite && (
+                  <div className="mt-2 rounded bg-muted/60 p-2 font-mono text-[11px] text-muted-foreground">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] uppercase font-sans text-muted-foreground font-semibold">Suggested Bullet:</span>
+                      <button
+                        onClick={() => copyText(s.exampleRewrite!, "Suggested bullet")}
+                        className="flex items-center gap-1 text-[10px] text-primary hover:underline font-sans"
+                      >
+                        <Copy className="size-3" /> Copy
+                      </button>
+                    </div>
+                    {s.exampleRewrite}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-5 py-4">
