@@ -127,4 +127,28 @@ export default defineSchema({
     organization: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_user", ["userId"]),
+
+  // Document Vault (transcripts, certificates, ID proofs, recommendation letters)
+  documents: defineTable({
+    userId: v.id("users"),
+    title: v.string(),
+    category: v.string(), // transcript | certificate | id_proof | recommendation_letter | publication | other
+    fileName: v.string(),
+    fileId: v.id("_storage"),
+    fileSize: v.optional(v.number()),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_user", ["userId"]),
+
+  // Mentor & counselor view-only sharing links
+  shareLinks: defineTable({
+    userId: v.id("users"),
+    token: v.string(),
+    scope: v.string(), // "full_pipeline" | "resume_only"
+    mentorName: v.optional(v.string()),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_user", ["userId"]),
 });

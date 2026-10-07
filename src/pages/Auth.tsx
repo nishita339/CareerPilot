@@ -72,6 +72,23 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     }
   };
 
+  const handleGuestSubmit = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      await signIn("anonymous");
+      navigate(redirect);
+    } catch (error) {
+      console.error("Guest sign-in error:", error);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Failed to sign in. Please try again.",
+      );
+      setIsLoading(false);
+    }
+  };
+
   const handleOtpSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsLoading(true);
@@ -151,6 +168,30 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                     {error && (
                       <p className="mt-3 text-sm text-destructive">{error}</p>
                     )}
+
+                    <div className="relative my-5 flex items-center justify-center">
+                      <div className="absolute inset-0 flex items-center">
+                        <div className="w-full border-t border-border" />
+                      </div>
+                      <span className="relative bg-card px-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+                        Or explore instantly
+                      </span>
+                    </div>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full rounded-none"
+                      onClick={handleGuestSubmit}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? (
+                        <Loader2 className="mr-2 size-4 animate-spin" />
+                      ) : (
+                        <span className="mr-2">⚡</span>
+                      )}
+                      One-Click Demo Access
+                    </Button>
                   </CardContent>
                 </form>
               </>
