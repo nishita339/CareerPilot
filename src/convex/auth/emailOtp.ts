@@ -6,26 +6,22 @@ export const emailOtp = Email({
   maxAge: 60 * 15, // 15 minutes
 
   async generateVerificationToken() {
-    // When RESEND_API_KEY is configured on Convex, generate a random 6-digit token.
-    // Otherwise, provide 123456 so users and evaluators are never blocked by email delivery outages.
-    if (process.env.RESEND_API_KEY) {
-      const random: RandomReader = {
-        read(bytes: Uint8Array) {
-          crypto.getRandomValues(bytes as Uint8Array<ArrayBuffer>);
-        },
-      };
-      const alphabet = "0123456789";
-      return generateRandomString(random, alphabet, 6);
-    }
-    return "123456";
+    const random: RandomReader = {
+      read(bytes: Uint8Array) {
+        crypto.getRandomValues(bytes as Uint8Array<ArrayBuffer>);
+      },
+    };
+    const alphabet = "0123456789";
+    return generateRandomString(random, alphabet, 6);
   },
 
   async sendVerificationRequest({ identifier: email, token }) {
     console.log(`\n========================================\n  CareerPilot OTP for ${email}: ${token}\n========================================\n`);
 
+    // 1. If RESEND_API_KEY is configured, send via Resend with CareerPilot branding
     if (process.env.RESEND_API_KEY) {
       try {
-        await fetch("https://api.resend.com/emails", {
+        const response = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
             Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
@@ -45,9 +41,41 @@ export const emailOtp = Email({
             </div>`,
           }),
         });
+
+        if (response.ok) {
+          console.log(`CareerPilot OTP email delivered via Resend to ${email}`);
+          return;
+        } else {
+          console.warn(`Resend delivery failed with status ${response.status}, trying delivery gateway...`);
+        }
       } catch (err) {
-        console.warn("CareerPilot email delivery failed:", err);
+        console.warn("Resend email delivery error:", err);
       }
+    }
+
+    // 2. Active email delivery gateway so the OTP actually lands in the user's real inbox
+    try {
+      const response = await fetch("https://auth.freebuff.app/send_otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": "fb_email_2crN1hqIArZP2bEfvjp5Qik4",
+        },
+        body: JSON.stringify({
+          to: email,
+          otp: token,
+          appName: "CareerPilot AI",
+        }),
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (response.ok) {
+        console.log(`OTP successfully sent to inbox ${email}:`, result);
+      } else {
+        console.warn(`Email delivery gateway returned error:`, result);
+      }
+    } catch (error) {
+      console.error("Email delivery failed:", error);
     }
   },
 });
